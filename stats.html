@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Slowly Enhance - 详细统计</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f6fa;
+      color: #333;
+      padding-bottom: 40px;
+    }
+    .top-bar {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 24px 32px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .top-bar h1 { font-size: 22px; font-weight: 700; }
+    .top-bar .sub { font-size: 13px; opacity: 0.8; margin-top: 4px; }
+
+    .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      flex-wrap: wrap;
+    }
+    .tab {
+      padding: 8px 18px;
+      border-radius: 20px;
+      border: 1px solid #ddd;
+      background: white;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s;
+    }
+    .tab:hover { border-color: #667eea; color: #667eea; }
+    .tab.active {
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: white;
+      border-color: transparent;
+    }
+
+    .card {
+      background: white;
+      border-radius: 14px;
+      padding: 24px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
+    .card-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: #555;
+      margin-bottom: 16px;
+    }
+
+    .stat-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 16px;
+    }
+    .stat-item {
+      text-align: center;
+      padding: 16px;
+      background: #f8f9ff;
+      border-radius: 12px;
+    }
+    .stat-item .num {
+      font-size: 28px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    .stat-item .label {
+      font-size: 12px;
+      color: #999;
+      margin-top: 4px;
+    }
+
+    .bar-chart { margin-top: 12px; }
+    .bar-row {
+      display: flex;
+      align-items: center;
+      margin-bottom: 8px;
+      gap: 10px;
+    }
+    .bar-label {
+      width: 120px;
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      flex-shrink: 0;
+    }
+    .bar-track {
+      flex: 1;
+      height: 24px;
+      background: #f0f0f0;
+      border-radius: 6px;
+      overflow: hidden;
+      display: flex;
+    }
+    .bar-fill-sent {
+      height: 100%;
+      background: linear-gradient(90deg, #667eea, #7c6eea);
+      border-radius: 6px 0 0 6px;
+      transition: width 0.5s ease;
+    }
+    .bar-fill-received {
+      height: 100%;
+      background: linear-gradient(90deg, #a78bfa, #c4b5fd);
+      border-radius: 0 6px 6px 0;
+      transition: width 0.5s ease;
+    }
+    .bar-value {
+      width: 50px;
+      text-align: right;
+      font-size: 13px;
+      font-weight: 600;
+      color: #667eea;
+      flex-shrink: 0;
+    }
+
+    .legend {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: #666;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .legend-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+    }
+
+    .timeline-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 120px;
+      margin-top: 12px;
+      padding: 0 4px;
+    }
+    .timeline-bar {
+      flex: 1;
+      min-width: 3px;
+      max-width: 20px;
+      border-radius: 3px 3px 0 0;
+      position: relative;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .timeline-bar:hover { opacity: 0.8; }
+    .timeline-bar .tip {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: white;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: nowrap;
+      margin-bottom: 4px;
+    }
+    .timeline-bar:hover .tip { display: block; }
+
+    .detail-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .detail-table th {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 2px solid #eee;
+      color: #999;
+      font-weight: 500;
+      font-size: 12px;
+    }
+    .detail-table td {
+      padding: 10px 12px;
+      border-bottom: 1px solid #f5f5f5;
+    }
+    .detail-table tr:hover td { background: #fafafe; }
+
+    .empty-msg {
+      text-align: center;
+      padding: 60px 20px;
+      color: #999;
+      font-size: 14px;
+    }
+
+    .export-btn {
+      padding: 8px 20px;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 500;
+      float: right;
+      margin-top: -8px;
+    }
+    .export-btn:hover { opacity: 0.9; }
+  </style>
+</head>
+<body>
+  <div class="top-bar">
+    <h1>Slowly Enhance - 详细统计</h1>
+    <div class="sub" id="topSub">加载中...</div>
+  </div>
+
+  <div class="container">
+    <div class="tabs" id="tabs"></div>
+    <div id="mainContent">
+      <div class="empty-msg">加载中...</div>
+    </div>
+  </div>
+
+  <script src="stats.js"></script>
+</body>
+</html>

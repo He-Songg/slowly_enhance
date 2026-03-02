@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "Slowly Enhance - 信件统计助手",
+  "version": "1.0.6",
+  "description": "为 Slowly Web 提供信件数据统计功能：信件数量、文字数、图片、语音等",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://web.slowly.app/*",
+    "https://api.getslowly.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://web.slowly.app/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://web.slowly.app/*"],
+      "js": ["utils/data-store.js", "utils/interceptor.js", "utils/page-helper.js", "content.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
