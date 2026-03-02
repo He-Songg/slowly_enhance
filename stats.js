@@ -440,6 +440,16 @@ async function loadAdvancedFriend(tabId, friendId) {
     container.insertAdjacentHTML('beforeend', renderWordTrend(adv.wordTrend));
     container.insertAdjacentHTML('beforeend', renderReplyTrend(adv.replyTrend));
     container.insertAdjacentHTML('beforeend', renderHourStats(adv.hourStats));
+
+    try {
+      const wordFreq = await sendToTab(tabId, { action: 'getWordFreq', friendId });
+      if (wordFreq) {
+        container.insertAdjacentHTML('beforeend', renderWordFreq(wordFreq));
+        bindWordFreqTabs();
+        initWordClouds();
+      }
+    } catch(e) {}
+
     container.insertAdjacentHTML('beforeend', renderFriendExportSection(friendId));
     bindFriendExportButtons(tabId, friendId);
   } catch(e) {
@@ -874,6 +884,167 @@ function renderHourStats(hourStats) {
     </div>`;
 }
 
+// ========== 词频统计 ==========
+
+const WF_COLORS = ['#667eea','#f59e0b','#10b981','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316','#6366f1','#14b8a6','#0ea5e9','#d946ef','#84cc16','#fb7185'];
+
+function drawWordCloud(canvas, words) {
+  if (!words || words.length === 0) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const maxC = words[0].count, minC = words[words.length - 1].count;
+  const sizeMin = 12, sizeMax = Math.min(48, H * 0.14);
+  const placed = [];
+
+  const items = words.map((w, i) => {
+    const ratio = maxC === minC ? 1 : (w.count - minC) / (maxC - minC);
+    const fontSize = sizeMin + ratio * (sizeMax - sizeMin);
+    const weight = ratio > 0.5 ? 'bold' : 'normal';
+    const vertical = (i % 4 === 0);
+    const color = WF_COLORS[i % WF_COLORS.length];
+    return { word: w.word, count: w.count, fontSize, weight, vertical, color, x: 0, y: 0, w: 0, h: 0 };
+  });
+
+  items.forEach(item => {
+    ctx.font = `${item.weight} ${item.fontSize}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif`;
+    const tm = ctx.measureText(item.word);
+    if (item.vertical) { item.w = item.fontSize * 1.2; item.h = tm.width + 4; }
+    else { item.w = tm.width + 4; item.h = item.fontSize * 1.2; }
+  });
+
+  function overlaps(a) {
+    for (const b of placed) {
+      if (a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y) return true;
+    }
+    return false;
+  }
+
+  const cx = W / 2, cy = H / 2;
+  items.forEach(item => {
+    item.x = cx - item.w / 2; item.y = cy - item.h / 2;
+    if (!overlaps(item)) { placed.push(item); return; }
+    for (let t = 0; t < 1500; t++) {
+      const angle = t * 0.15;
+      const r = 3 + t * 0.45;
+      item.x = cx + r * Math.cos(angle) - item.w / 2;
+      item.y = cy + r * Math.sin(angle) * 0.7 - item.h / 2;
+      if (item.x >= 0 && item.y >= 0 && item.x + item.w <= W && item.y + item.h <= H && !overlaps(item)) {
+        placed.push(item); return;
+      }
+    }
+    // place off-screen if spiral fails
+    item.x = -9999; item.y = -9999; placed.push(item);
+  });
+
+  placed.forEach(item => {
+    if (item.x < -999) return;
+    ctx.save();
+    ctx.font = `${item.weight} ${item.fontSize}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif`;
+    ctx.fillStyle = item.color;
+    ctx.textBaseline = 'top';
+    if (item.vertical) {
+      ctx.translate(item.x + item.w, item.y);
+      ctx.rotate(Math.PI / 2);
+      ctx.fillText(item.word, 2, 0);
+    } else {
+      ctx.fillText(item.word, item.x + 2, item.y + 2);
+    }
+    ctx.restore();
+  });
+
+  canvas._wfItems = placed;
+}
+
+function setupCloudTooltip(canvas, tooltip) {
+  if (!canvas || !tooltip) return;
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const items = canvas._wfItems || [];
+    let hit = null;
+    for (const it of items) {
+      if (it.x < -999) continue;
+      if (mx >= it.x && mx <= it.x + it.w && my >= it.y && my <= it.y + it.h) { hit = it; break; }
+    }
+    if (hit) {
+      tooltip.innerHTML = `<b>${escapeHtml(hit.word)}</b><br>${hit.count} 次`;
+      tooltip.style.display = 'block';
+      tooltip.style.left = (e.clientX + 12) + 'px';
+      tooltip.style.top = (e.clientY - 36) + 'px';
+      canvas.style.cursor = 'pointer';
+    } else {
+      tooltip.style.display = 'none';
+      canvas.style.cursor = 'default';
+    }
+  });
+  canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+}
+
+let _wfData = null;
+
+function renderWordFreq(data) {
+  if (!data) return '';
+  const hasData = data.my.length > 0 || data.friend.length > 0 || data.combined.length > 0;
+  if (!hasData) return '';
+  _wfData = data;
+
+  return `
+    <div class="card">
+      <div class="card-title">📝 词频统计</div>
+      <div class="wf-tabs">
+        <div class="wf-tab active" data-wf="combined">全部</div>
+        <div class="wf-tab" data-wf="my">我的高频词</div>
+        <div class="wf-tab" data-wf="friend">对方高频词</div>
+      </div>
+      <div class="wf-panel" id="wfCombined"><div class="wf-cloud-wrap"><canvas id="wfCanvasCombined"></canvas></div></div>
+      <div class="wf-panel" id="wfMy" style="display:none"><div class="wf-cloud-wrap"><canvas id="wfCanvasMy"></canvas></div></div>
+      <div class="wf-panel" id="wfFriend" style="display:none"><div class="wf-cloud-wrap"><canvas id="wfCanvasFriend"></canvas></div></div>
+      <div class="wf-cloud-tip" id="wfTip"></div>
+    </div>`;
+}
+
+function initWordClouds() {
+  if (!_wfData) return;
+  setTimeout(() => {
+    const tip = document.getElementById('wfTip');
+    const cCombined = document.getElementById('wfCanvasCombined');
+    const cMy = document.getElementById('wfCanvasMy');
+    const cFriend = document.getElementById('wfCanvasFriend');
+    if (cCombined) { drawWordCloud(cCombined, _wfData.combined); setupCloudTooltip(cCombined, tip); }
+    if (cMy) { drawWordCloud(cMy, _wfData.my); setupCloudTooltip(cMy, tip); }
+    if (cFriend) { drawWordCloud(cFriend, _wfData.friend); setupCloudTooltip(cFriend, tip); }
+  }, 100);
+}
+
+function bindWordFreqTabs() {
+  setTimeout(() => {
+    document.querySelectorAll('.wf-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.wf-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        document.querySelectorAll('.wf-panel').forEach(p => p.style.display = 'none');
+        const target = tab.dataset.wf;
+        const panelId = target === 'my' ? 'wfMy' : target === 'friend' ? 'wfFriend' : 'wfCombined';
+        const panel = document.getElementById(panelId);
+        panel.style.display = 'block';
+        const cv = panel.querySelector('canvas');
+        if (cv && _wfData) {
+          const key = target === 'my' ? 'my' : target === 'friend' ? 'friend' : 'combined';
+          setTimeout(() => {
+            drawWordCloud(cv, _wfData[key]);
+            setupCloudTooltip(cv, document.getElementById('wfTip'));
+          }, 50);
+        }
+      });
+    });
+  }, 100);
+}
+
 // ========== 数据导出 ==========
 
 function renderExportSection() {
@@ -885,6 +1056,7 @@ function renderExportSection() {
         <button class="export-btn" id="exportJsonBtn">导出 JSON</button>
         <button class="export-btn" id="exportHtmlBtn">导出 HTML 存档</button>
         <button class="export-btn" id="exportCsvBtn" style="background:#4caf50">导出 CSV</button>
+        <button class="export-btn" id="exportScreenshotBtn" style="background:#e65100">导出长图</button>
       </div>
     </div>`;
 }
@@ -894,12 +1066,14 @@ function bindExportButtons(tabId) {
     const jsonBtn = document.getElementById('exportJsonBtn');
     const htmlBtn = document.getElementById('exportHtmlBtn');
     const csvBtn = document.getElementById('exportCsvBtn');
+    const ssBtn = document.getElementById('exportScreenshotBtn');
 
     if (jsonBtn) jsonBtn.addEventListener('click', () => doExportJson(tabId));
     if (htmlBtn) htmlBtn.addEventListener('click', () => doExportHtml(tabId));
     if (csvBtn) csvBtn.addEventListener('click', () => {
       if (cachedOverview) exportCSV(cachedOverview);
     });
+    if (ssBtn) ssBtn.addEventListener('click', () => doExportScreenshot('slowly_overview'));
   }, 100);
 }
 
@@ -945,6 +1119,31 @@ function downloadFile(content, filename, mimeType) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+async function doExportScreenshot(prefix) {
+  const target = document.getElementById('mainContent');
+  if (!target || typeof html2canvas === 'undefined') {
+    alert('截图功能不可用');
+    return;
+  }
+  const allBtns = target.querySelectorAll('.export-btn');
+  allBtns.forEach(b => b.style.display = 'none');
+  try {
+    const canvas = await html2canvas(target, {
+      backgroundColor: getComputedStyle(document.body).backgroundColor || '#f5f6fa',
+      scale: 2,
+      useCORS: true,
+      logging: false
+    });
+    const link = document.createElement('a');
+    link.download = `${prefix}_${dateStamp()}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  } catch (e) {
+    alert('截图失败: ' + e.message);
+  }
+  allBtns.forEach(b => b.style.display = '');
 }
 
 function buildHtmlArchive(data) {
@@ -1091,6 +1290,7 @@ function renderFriendExportSection(friendId) {
         <button class="export-btn" id="friendExportJsonBtn">导出 JSON</button>
         <button class="export-btn" id="friendExportHtmlBtn">导出 HTML</button>
         <button class="export-btn" id="friendExportTxtBtn" style="background:#4caf50">导出 TXT</button>
+        <button class="export-btn" id="friendExportScreenshotBtn" style="background:#e65100">导出长图</button>
       </div>
     </div>`;
 }
@@ -1100,10 +1300,16 @@ function bindFriendExportButtons(tabId, friendId) {
     const jsonBtn = document.getElementById('friendExportJsonBtn');
     const htmlBtn = document.getElementById('friendExportHtmlBtn');
     const txtBtn = document.getElementById('friendExportTxtBtn');
+    const ssBtn = document.getElementById('friendExportScreenshotBtn');
 
     if (jsonBtn) jsonBtn.addEventListener('click', () => doFriendExportJson(tabId, friendId));
     if (htmlBtn) htmlBtn.addEventListener('click', () => doFriendExportHtml(tabId, friendId));
     if (txtBtn) txtBtn.addEventListener('click', () => doFriendExportTxt(tabId, friendId));
+    if (ssBtn) {
+      const friend = cachedOverview.friendRanking?.find(f => f.id === friendId);
+      const fname = friend?.name || friendId;
+      ssBtn.addEventListener('click', () => doExportScreenshot(`slowly_${fname}`));
+    }
   }, 100);
 }
 

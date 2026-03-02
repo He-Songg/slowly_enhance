@@ -52,6 +52,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     exportFriendData(msg.friendId).then(data => sendResponse(data));
     return true;
   }
+  if (msg.action === 'getWordFreq') {
+    computeWordFreq(msg.friendId).then(data => sendResponse(data));
+    return true;
+  }
   if (msg.action === 'clearData') {
     Promise.all([
       SlowlyDB.clearStore('friends'),
@@ -383,6 +387,83 @@ async function computeOverview() {
     friendRanking: allStats.filter(f => f.letterCount > 0),
     hiddenList: hiddenStats,
     removedList: removedStats
+  };
+}
+
+const EN_STOP_WORDS = new Set([
+  'the','a','an','is','are','was','were','be','been','being',
+  'have','has','had','do','does','did','will','would','shall','should',
+  'may','might','must','can','could','to','of','in','for','on',
+  'with','at','by','from','as','into','through','during','before',
+  'after','above','below','between','out','off','over','under','again',
+  'further','then','once','here','there','when','where','why','how',
+  'all','both','each','few','more','most','other','some','such','no',
+  'nor','not','only','own','same','so','than','too','very','just',
+  'because','but','and','or','if','while','that','this','it','its',
+  'i','me','my','we','us','our','you','your','he','him','his',
+  'she','her','they','them','their','what','which','who','whom',
+  'am','about','up','also','like','really','much','well','even',
+  'still','back','now','get','got','go','went','come','came',
+  'know','think','see','want','make','take','give','say','said',
+  'one','two','time','way','thing','man','day','dont','im','ive',
+  'thats','youre','haha','hehe','yeah','okay','ok','lol','yes'
+]);
+
+function extractWords(text) {
+  if (!text) return { cn: [], en: [] };
+  const cnMatches = text.match(/[\u4e00-\u9fff\u3400-\u4dbf]{2,4}/g) || [];
+  const cnWords = [];
+  const cnRaw = text.replace(/[^\u4e00-\u9fff\u3400-\u4dbf]+/g, ' ').trim();
+  for (const seg of cnRaw.split(/\s+/)) {
+    if (seg.length < 2) continue;
+    for (let len = 2; len <= Math.min(4, seg.length); len++) {
+      for (let i = 0; i <= seg.length - len; i++) {
+        cnWords.push(seg.substring(i, i + len));
+      }
+    }
+  }
+
+  const enRaw = text.replace(/[\u4e00-\u9fff\u3400-\u4dbf]/g, ' ').toLowerCase();
+  const enWords = enRaw.split(/[^a-z']+/).filter(w => w.length >= 2 && !EN_STOP_WORDS.has(w));
+
+  return { cn: cnWords, en: enWords };
+}
+
+function buildFreqMap(wordArrays) {
+  const freq = {};
+  for (const arr of wordArrays) {
+    const { cn, en } = arr;
+    for (const w of cn) freq[w] = (freq[w] || 0) + 1;
+    for (const w of en) freq[w] = (freq[w] || 0) + 1;
+  }
+  return Object.entries(freq)
+    .filter(([, c]) => c >= 2)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 30)
+    .map(([word, count]) => ({ word, count }));
+}
+
+async function computeWordFreq(friendId) {
+  const letters = await SlowlyDB.getLettersByFriend(friendId);
+  if (!letters.length) return { my: [], friend: [], combined: [] };
+
+  const myId = await resolveMyId(letters);
+  const myWordArrays = [];
+  const friendWordArrays = [];
+
+  for (const l of letters) {
+    const words = extractWords(l.body);
+    if (myId && l.user === myId) {
+      myWordArrays.push(words);
+    } else {
+      friendWordArrays.push(words);
+    }
+  }
+
+  return {
+    my: buildFreqMap(myWordArrays),
+    friend: buildFreqMap(friendWordArrays),
+    combined: buildFreqMap([...myWordArrays, ...friendWordArrays])
   };
 }
 
