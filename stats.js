@@ -200,6 +200,32 @@ function showOverview() {
   if (exportBtn) {
     exportBtn.addEventListener('click', () => exportCSV(data));
   }
+
+  loadAdvancedOverview();
+}
+
+async function loadAdvancedOverview() {
+  const tab = await getSlowlyTab();
+  if (!tab) return;
+  try {
+    const adv = await sendToTab(tab.id, { action: 'getAdvancedStats' });
+    if (!adv) return;
+    const container = document.getElementById('mainContent');
+
+    // 热力图
+    container.insertAdjacentHTML('beforeend', renderHeatmap(adv.heatmap));
+
+    // 邮票统计
+    container.insertAdjacentHTML('beforeend', renderStamps(adv));
+
+    // 信件长度趋势
+    container.insertAdjacentHTML('beforeend', renderWordTrend(adv.wordTrend));
+
+    // 国家分布
+    container.insertAdjacentHTML('beforeend', renderCountryStats(adv));
+  } catch(e) {
+    console.warn('[Slowly Enhance] 高级统计加载失败:', e);
+  }
 }
 
 async function showFriendDetail(tabId, friendId) {
@@ -318,6 +344,22 @@ async function showFriendDetail(tabId, friendId) {
     </div>`;
 
   document.getElementById('mainContent').innerHTML = html;
+
+  loadAdvancedFriend(tabId, friendId);
+}
+
+async function loadAdvancedFriend(tabId, friendId) {
+  try {
+    const adv = await sendToTab(tabId, { action: 'getAdvancedStats', friendId });
+    if (!adv) return;
+    const container = document.getElementById('mainContent');
+
+    container.insertAdjacentHTML('beforeend', renderHeatmap(adv.heatmap));
+    container.insertAdjacentHTML('beforeend', renderStamps(adv));
+    container.insertAdjacentHTML('beforeend', renderWordTrend(adv.wordTrend));
+  } catch(e) {
+    console.warn('[Slowly Enhance] 好友高级统计加载失败:', e);
+  }
 }
 
 function exportCSV(data) {
@@ -378,4 +420,223 @@ function sendToTab(tabId, msg) {
       else resolve(response);
     });
   });
+}
+
+// ========== 热力图 ==========
+
+function renderHeatmap(heatmap) {
+  if (!heatmap || Object.keys(heatmap).length === 0) return '';
+
+  const dates = Object.keys(heatmap).sort();
+  const minDate = new Date(dates[0]);
+  const maxDate = new Date(dates[dates.length - 1]);
+  const maxCount = Math.max(...Object.values(heatmap).map(d => d.total));
+
+  const startDate = new Date(minDate);
+  startDate.setDate(startDate.getDate() - startDate.getDay());
+
+  const endDate = new Date(maxDate);
+  endDate.setDate(endDate.getDate() + (6 - endDate.getDay()));
+
+  const cells = [];
+  const months = [];
+  let lastMonth = -1;
+  let weekIdx = 0;
+
+  const cur = new Date(startDate);
+  while (cur <= endDate) {
+    const ds = cur.toISOString().substring(0, 10);
+    const day = cur.getDay();
+
+    if (day === 0) {
+      const m = cur.getMonth();
+      if (m !== lastMonth) {
+        months.push({ label: (m + 1) + '月', week: weekIdx });
+        lastMonth = m;
+      }
+    }
+
+    const d = heatmap[ds];
+    const count = d ? d.total : 0;
+    const level = count === 0 ? 0 : count <= maxCount * 0.25 ? 1 : count <= maxCount * 0.5 ? 2 : count <= maxCount * 0.75 ? 3 : 4;
+    const colors = ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127'];
+    const tip = d ? `${ds}: ${d.sent}封发出, ${d.received}封收到` : ds;
+
+    cells.push(`<div class="hm-cell" style="background:${colors[level]};grid-row:${day + 1}" title="${tip}"><span class="hm-tip">${tip}</span></div>`);
+
+    cur.setDate(cur.getDate() + 1);
+    if (cur.getDay() === 0) weekIdx++;
+  }
+
+  const totalWeeks = weekIdx + 1;
+  const monthLabels = months.map(m => {
+    const left = (m.week / totalWeeks * 100).toFixed(1);
+    return `<span style="position:absolute;left:${left}%">${m.label}</span>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title">📅 通信热力图</div>
+      <div class="heatmap-wrap">
+        <div style="position:relative;height:18px;margin-bottom:4px">${monthLabels}</div>
+        <div class="heatmap" style="grid-template-columns:repeat(${totalWeeks}, 14px)">
+          ${cells.join('')}
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;gap:4px;margin-top:10px;font-size:11px;color:#999">
+        <span>少</span>
+        <div style="width:12px;height:12px;background:#ebedf0;border-radius:2px"></div>
+        <div style="width:12px;height:12px;background:#c6e48b;border-radius:2px"></div>
+        <div style="width:12px;height:12px;background:#7bc96f;border-radius:2px"></div>
+        <div style="width:12px;height:12px;background:#239a3b;border-radius:2px"></div>
+        <div style="width:12px;height:12px;background:#196127;border-radius:2px"></div>
+        <span>多</span>
+      </div>
+    </div>`;
+}
+
+// ========== 邮票统计 ==========
+
+function renderStamps(adv) {
+  if (!adv.stampRanking || adv.stampRanking.length === 0) return '';
+
+  const top20 = adv.stampRanking.slice(0, 20);
+
+  let items = top20.map(s => `
+    <div class="stamp-item">
+      <span class="stamp-icon">🎫</span>
+      <span class="stamp-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>
+      <span class="stamp-count">${s.count}</span>
+    </div>`).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title">🎫 邮票统计</div>
+      <div class="stat-row" style="margin-bottom:16px">
+        <div class="stat-item">
+          <div class="num">${adv.stampTotal}</div>
+          <div class="label">使用邮票总次数</div>
+        </div>
+        <div class="stat-item">
+          <div class="num">${adv.stampUnique}</div>
+          <div class="label">不同邮票种类</div>
+        </div>
+      </div>
+      <div class="stamp-grid">${items}</div>
+    </div>`;
+}
+
+// ========== 信件长度趋势 ==========
+
+function renderWordTrend(wordTrend) {
+  if (!wordTrend || wordTrend.length === 0) return '';
+
+  const byMonth = {};
+  wordTrend.forEach(w => {
+    const month = w.date.substring(0, 7);
+    if (!byMonth[month]) byMonth[month] = { sent: 0, received: 0, sentCount: 0, receivedCount: 0 };
+    if (w.isMine) {
+      byMonth[month].sent += w.words;
+      byMonth[month].sentCount++;
+    } else {
+      byMonth[month].received += w.words;
+      byMonth[month].receivedCount++;
+    }
+  });
+
+  const months = Object.keys(byMonth).sort();
+  if (months.length === 0) return '';
+
+  const data = months.map(m => ({
+    month: m,
+    sentAvg: byMonth[m].sentCount > 0 ? Math.round(byMonth[m].sent / byMonth[m].sentCount) : 0,
+    receivedAvg: byMonth[m].receivedCount > 0 ? Math.round(byMonth[m].received / byMonth[m].receivedCount) : 0
+  }));
+
+  const maxVal = Math.max(...data.map(d => Math.max(d.sentAvg, d.receivedAvg)), 1);
+  const svgW = 800;
+  const svgH = 150;
+  const padL = 40;
+  const padR = 10;
+  const padT = 10;
+  const padB = 25;
+  const chartW = svgW - padL - padR;
+  const chartH = svgH - padT - padB;
+
+  function toX(i) { return padL + (i / Math.max(data.length - 1, 1)) * chartW; }
+  function toY(v) { return padT + chartH - (v / maxVal) * chartH; }
+
+  function polyline(key, color) {
+    const pts = data.map((d, i) => `${toX(i)},${toY(d[key])}`).join(' ');
+    return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+
+  const xLabels = data.map((d, i) => {
+    if (data.length <= 12 || i % Math.ceil(data.length / 12) === 0) {
+      return `<text x="${toX(i)}" y="${svgH - 2}" text-anchor="middle" font-size="10" fill="#999">${d.month.substring(2)}</text>`;
+    }
+    return '';
+  }).join('');
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(pct => {
+    const y = padT + chartH * (1 - pct);
+    const val = Math.round(maxVal * pct);
+    return `<line x1="${padL}" y1="${y}" x2="${svgW - padR}" y2="${y}" stroke="#eee" stroke-width="1"/>
+            <text x="${padL - 4}" y="${y + 4}" text-anchor="end" font-size="10" fill="#bbb">${val}</text>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title">📈 信件长度趋势（月均字数）</div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#667eea"></div> 我写的</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> 对方写的</div>
+      </div>
+      <svg class="trend-svg" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none">
+        ${gridLines}
+        ${polyline('sentAvg', '#667eea')}
+        ${polyline('receivedAvg', '#f59e0b')}
+        ${xLabels}
+      </svg>
+    </div>`;
+}
+
+// ========== 国家/地区分布 ==========
+
+function countryCodeToFlag(code) {
+  if (!code || code.length !== 2) return '🌍';
+  const upper = code.toUpperCase();
+  return String.fromCodePoint(...[...upper].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+}
+
+function renderCountryStats(adv) {
+  const countries = adv.countryFromFriends || {};
+  if (Object.keys(countries).length === 0) return '';
+
+  const sorted = Object.entries(countries)
+    .map(([code, count]) => ({ code, count }))
+    .sort((a, b) => b.count - a.count);
+
+  const items = sorted.map(c => `
+    <div class="country-item">
+      <div class="country-flag">${countryCodeToFlag(c.code)}</div>
+      <div class="country-code">${c.code.toUpperCase()}</div>
+      <div class="country-count">${c.count}</div>
+    </div>`).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title">🌍 笔友国家/地区分布</div>
+      <div class="stat-row" style="margin-bottom:16px">
+        <div class="stat-item">
+          <div class="num">${sorted.length}</div>
+          <div class="label">国家/地区</div>
+        </div>
+        <div class="stat-item">
+          <div class="num">${sorted.reduce((a, c) => a + c.count, 0)}</div>
+          <div class="label">总笔友数</div>
+        </div>
+      </div>
+      <div class="country-grid">${items}</div>
+    </div>`;
 }

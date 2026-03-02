@@ -199,6 +199,111 @@
     }
     .detail-table tr:hover td { background: #fafafe; }
 
+    .heatmap-wrap {
+      overflow-x: auto;
+      padding-bottom: 8px;
+    }
+    .heatmap {
+      display: grid;
+      grid-template-rows: repeat(7, 14px);
+      grid-auto-flow: column;
+      gap: 3px;
+      width: max-content;
+    }
+    .hm-cell {
+      width: 14px;
+      height: 14px;
+      border-radius: 3px;
+      cursor: pointer;
+      position: relative;
+    }
+    .hm-cell:hover { outline: 1px solid rgba(0,0,0,0.3); }
+    .hm-cell .hm-tip {
+      display: none;
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #333;
+      color: white;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      white-space: nowrap;
+      z-index: 10;
+      margin-bottom: 4px;
+    }
+    .hm-cell:hover .hm-tip { display: block; }
+    .hm-months {
+      display: flex;
+      font-size: 11px;
+      color: #999;
+      margin-bottom: 6px;
+      padding-left: 0;
+    }
+    .hm-months span { flex-shrink: 0; }
+
+    .trend-chart {
+      position: relative;
+      height: 160px;
+      margin-top: 12px;
+    }
+    .trend-chart canvas {
+      width: 100%;
+      height: 100%;
+    }
+    .trend-svg {
+      width: 100%;
+      height: 160px;
+    }
+
+    .stamp-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .stamp-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #f8f9ff;
+      border-radius: 10px;
+    }
+    .stamp-name {
+      flex: 1;
+      font-size: 12px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .stamp-count {
+      font-size: 16px;
+      font-weight: 700;
+      color: #667eea;
+    }
+    .stamp-icon {
+      font-size: 20px;
+    }
+
+    .country-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .country-item {
+      text-align: center;
+      padding: 14px 10px;
+      background: #f8f9ff;
+      border-radius: 10px;
+    }
+    .country-flag { font-size: 28px; line-height: 1; }
+    .country-code { font-size: 12px; color: #999; margin-top: 4px; }
+    .country-count { font-size: 18px; font-weight: 700; color: #667eea; margin-top: 2px; }
+
     .empty-msg {
       text-align: center;
       padding: 60px 20px;

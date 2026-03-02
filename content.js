@@ -36,6 +36,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     });
     return true;
   }
+  if (msg.action === 'getAdvancedStats') {
+    computeAdvancedStats(msg.friendId).then(stats => sendResponse(stats));
+    return true;
+  }
   if (msg.action === 'clearData') {
     Promise.all([
       SlowlyDB.clearStore('friends'),
@@ -160,6 +164,83 @@ async function computeStats(friendId) {
     communicationDays: dates.length >= 2
       ? Math.ceil((new Date(dates[dates.length - 1]) - new Date(dates[0])) / (1000 * 60 * 60 * 24))
       : 0
+  };
+}
+
+async function computeAdvancedStats(friendId) {
+  const allLetters = friendId
+    ? await SlowlyDB.getLettersByFriend(friendId)
+    : await SlowlyDB.getAllLetters();
+  const allFriends = await SlowlyDB.getAllFriends();
+  const myId = await resolveMyId(allLetters);
+
+  // 1. 邮票统计
+  const stampCount = {};
+  allLetters.forEach(l => {
+    if (l.stamp) {
+      stampCount[l.stamp] = (stampCount[l.stamp] || 0) + 1;
+    }
+  });
+  const stampRanking = Object.entries(stampCount)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count);
+
+  // 2. 热力图数据（按日期统计收发数量）
+  const heatmap = {};
+  allLetters.forEach(l => {
+    if (!l.deliver_at) return;
+    const dateStr = l.deliver_at.substring(0, 10);
+    if (!heatmap[dateStr]) heatmap[dateStr] = { sent: 0, received: 0, total: 0 };
+    if (myId && l.user === myId) {
+      heatmap[dateStr].sent++;
+    } else {
+      heatmap[dateStr].received++;
+    }
+    heatmap[dateStr].total++;
+  });
+
+  // 3. 信件长度趋势（按时间排序的每封信字数）
+  const wordTrend = allLetters
+    .filter(l => l.deliver_at && l.body)
+    .sort((a, b) => a.deliver_at.localeCompare(b.deliver_at))
+    .map(l => {
+      const text = l.body || '';
+      const cn = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+      const en = text.replace(/[\u4e00-\u9fff\u3400-\u4dbf]/g, ' ')
+        .split(/\s+/).filter(w => w.length > 0).length;
+      return {
+        date: l.deliver_at.substring(0, 10),
+        words: cn + en,
+        isMine: myId ? l.user === myId : false,
+        friendId: l.friendId
+      };
+    });
+
+  // 4. 国家/地区统计
+  const countryFromFriends = {};
+  allFriends.forEach(f => {
+    const code = f.country_code || f.raw?.location_code;
+    if (code) {
+      countryFromFriends[code] = (countryFromFriends[code] || 0) + 1;
+    }
+  });
+
+  const countryFromLetters = {};
+  allLetters.forEach(l => {
+    const code = l.raw?.sent_from;
+    if (code && myId && l.user !== myId) {
+      countryFromLetters[code] = (countryFromLetters[code] || 0) + 1;
+    }
+  });
+
+  return {
+    stampRanking,
+    stampTotal: allLetters.filter(l => l.stamp).length,
+    stampUnique: stampRanking.length,
+    heatmap,
+    wordTrend,
+    countryFromFriends,
+    countryFromLetters
   };
 }
 
