@@ -470,16 +470,17 @@ function renderHeatmap(heatmap) {
   }
 
   const totalWeeks = weekIdx + 1;
+  const gridWidth = totalWeeks * 14 + (totalWeeks - 1) * 3;
   const monthLabels = months.map(m => {
-    const left = (m.week / totalWeeks * 100).toFixed(1);
-    return `<span style="position:absolute;left:${left}%">${m.label}</span>`;
+    const leftPx = m.week * (14 + 3);
+    return `<span style="position:absolute;left:${leftPx}px">${m.label}</span>`;
   }).join('');
 
   return `
     <div class="card">
       <div class="card-title">📅 通信热力图</div>
       <div class="heatmap-wrap">
-        <div style="position:relative;height:18px;margin-bottom:4px">${monthLabels}</div>
+        <div style="position:relative;height:18px;margin-bottom:4px;width:${gridWidth}px">${monthLabels}</div>
         <div class="heatmap" style="grid-template-columns:repeat(${totalWeeks}, 14px)">
           ${cells.join('')}
         </div>
@@ -560,12 +561,13 @@ function renderWordTrend(wordTrend) {
   }));
 
   const maxVal = Math.max(...data.map(d => Math.max(d.sentAvg, d.receivedAvg)), 1);
-  const svgW = 800;
-  const svgH = 150;
-  const padL = 40;
-  const padR = 10;
+  const pointSpacing = 50;
+  const padL = 45;
+  const padR = 15;
   const padT = 10;
   const padB = 25;
+  const svgW = Math.max(padL + padR + (data.length - 1) * pointSpacing, 600);
+  const svgH = 150;
   const chartW = svgW - padL - padR;
   const chartH = svgH - padT - padB;
 
@@ -577,12 +579,9 @@ function renderWordTrend(wordTrend) {
     return `<polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
   }
 
-  const xLabels = data.map((d, i) => {
-    if (data.length <= 12 || i % Math.ceil(data.length / 12) === 0) {
-      return `<text x="${toX(i)}" y="${svgH - 2}" text-anchor="middle" font-size="10" fill="#999">${d.month.substring(2)}</text>`;
-    }
-    return '';
-  }).join('');
+  const xLabels = data.map((d, i) =>
+    `<text x="${toX(i)}" y="${svgH - 2}" text-anchor="middle" font-size="10" fill="#999">${d.month.substring(2)}</text>`
+  ).join('');
 
   const gridLines = [0, 0.25, 0.5, 0.75, 1].map(pct => {
     const y = padT + chartH * (1 - pct);
@@ -598,12 +597,14 @@ function renderWordTrend(wordTrend) {
         <div class="legend-item"><div class="legend-dot" style="background:#667eea"></div> 我写的</div>
         <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> 对方写的</div>
       </div>
-      <svg class="trend-svg" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none">
-        ${gridLines}
-        ${polyline('sentAvg', '#667eea')}
-        ${polyline('receivedAvg', '#f59e0b')}
-        ${xLabels}
-      </svg>
+      <div class="chart-scroll">
+        <svg class="trend-svg" style="width:${svgW}px;min-width:100%" viewBox="0 0 ${svgW} ${svgH}">
+          ${gridLines}
+          ${polyline('sentAvg', '#667eea')}
+          ${polyline('receivedAvg', '#f59e0b')}
+          ${xLabels}
+        </svg>
+      </div>
     </div>`;
 }
 
@@ -635,12 +636,13 @@ function renderReplyTrend(replyTrend) {
   if (allVals.length === 0) return '';
   const maxVal = Math.max(...allVals, 1);
 
-  const svgW = 800;
-  const svgH = 150;
+  const pointSpacing = 50;
   const padL = 50;
-  const padR = 10;
+  const padR = 15;
   const padT = 10;
   const padB = 25;
+  const svgW = Math.max(padL + padR + (data.length - 1) * pointSpacing, 600);
+  const svgH = 150;
   const chartW = svgW - padL - padR;
   const chartH = svgH - padT - padB;
 
@@ -664,12 +666,9 @@ function renderReplyTrend(replyTrend) {
     }).join('');
   }
 
-  const xLabels = data.map((d, i) => {
-    if (data.length <= 12 || i % Math.ceil(data.length / 12) === 0) {
-      return `<text x="${toX(i)}" y="${svgH - 2}" text-anchor="middle" font-size="10" fill="#999">${d.month.substring(2)}</text>`;
-    }
-    return '';
-  }).join('');
+  const xLabels = data.map((d, i) =>
+    `<text x="${toX(i)}" y="${svgH - 2}" text-anchor="middle" font-size="10" fill="#999">${d.month.substring(2)}</text>`
+  ).join('');
 
   function formatYLabel(hours) {
     if (hours < 24) return hours + 'h';
@@ -690,14 +689,16 @@ function renderReplyTrend(replyTrend) {
         <div class="legend-item"><div class="legend-dot" style="background:#667eea"></div> 我的回信速度</div>
         <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> 对方回信速度</div>
       </div>
-      <svg class="trend-svg" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none">
-        ${gridLines}
-        ${polyline('myAvg', '#667eea')}
-        ${polyline('friendAvg', '#f59e0b')}
-        ${dots('myAvg', '#667eea')}
-        ${dots('friendAvg', '#f59e0b')}
-        ${xLabels}
-      </svg>
+      <div class="chart-scroll">
+        <svg class="trend-svg" style="width:${svgW}px;min-width:100%" viewBox="0 0 ${svgW} ${svgH}">
+          ${gridLines}
+          ${polyline('myAvg', '#667eea')}
+          ${polyline('friendAvg', '#f59e0b')}
+          ${dots('myAvg', '#667eea')}
+          ${dots('friendAvg', '#f59e0b')}
+          ${xLabels}
+        </svg>
+      </div>
     </div>`;
 }
 
