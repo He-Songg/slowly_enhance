@@ -13,7 +13,8 @@ const SlowlyInterceptor = (() => {
     letters: /\/friend\/(\d+)\/all/,
     incoming: /\/letter\/incoming/,
     me: /\/web\/me$/,
-    meV2: /\/users\/me\/v2/
+    meV2: /\/users\/me\/v2/,
+    slowly: /api\.getslowly\.com\/slowly$/
   };
 
   let collectedCount = { friends: 0, letters: 0, hidden: 0, removed: 0 };
@@ -42,6 +43,8 @@ const SlowlyInterceptor = (() => {
         await processFriendsList(responseData);
       } else if (API_PATTERNS.me.test(url) || API_PATTERNS.meV2.test(url)) {
         await processMe(responseData);
+      } else if (API_PATTERNS.slowly.test(url)) {
+        await processSlowlyMeta(responseData);
       }
     } catch (err) {
       console.warn('[Slowly Enhance] 处理响应数据时出错:', err);
@@ -173,6 +176,19 @@ const SlowlyInterceptor = (() => {
         avatar: user.avatar
       });
       console.log(`[Slowly Enhance] ✓ 已记录当前用户: ${user.name || user.id}`);
+    }
+  }
+
+  async function processSlowlyMeta(data) {
+    if (!data) return;
+    let items = [];
+    if (Array.isArray(data.items)) items = data.items;
+    else if (Array.isArray(data.stamps)) items = data.stamps;
+    else if (Array.isArray(data)) items = data;
+    const stamps = items.filter(i => i && i.slug);
+    if (stamps.length > 0) {
+      await SlowlyDB.saveStampMeta(stamps);
+      console.log(`[Slowly Enhance] ✓ 已缓存 ${stamps.length} 个邮票元数据`);
     }
   }
 

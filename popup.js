@@ -1,4 +1,26 @@
+const POPUP_THEMES = {
+  purple: { '--primary': '#667eea', '--primary-dark': '#764ba2', '--primary-light': '#a78bfa', '--primary-bg': '#f8f9ff', '--bg': '#f8f9fa', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
+  orange: { '--primary': '#f59e0b', '--primary-dark': '#d97706', '--primary-light': '#fbbf24', '--primary-bg': '#fffbeb', '--bg': '#faf5ee', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
+  teal: { '--primary': '#14b8a6', '--primary-dark': '#0d9488', '--primary-light': '#5eead4', '--primary-bg': '#f0fdfa', '--bg': '#f0faf8', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
+  rose: { '--primary': '#f43f5e', '--primary-dark': '#be123c', '--primary-light': '#fb7185', '--primary-bg': '#fff1f2', '--bg': '#fdf2f4', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
+  dark: { '--primary': '#89b4fa', '--primary-dark': '#585b70', '--primary-light': '#b4befe', '--primary-bg': '#313244', '--bg': '#1e1e2e', '--card-bg': '#282838', '--text': '#cdd6f4', '--text-muted': '#6c7086' }
+};
+
+function applyPopupTheme(themeId) {
+  const vars = POPUP_THEMES[themeId];
+  if (!vars) return;
+  const root = document.documentElement;
+  for (const [prop, val] of Object.entries(vars)) {
+    root.style.setProperty(prop, val);
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const result = await chrome.storage.local.get('theme');
+    if (result.theme) applyPopupTheme(result.theme);
+  } catch {}
+
   const contentEl = document.getElementById('content');
   const statusDot = document.getElementById('statusDot');
   const statusText = document.getElementById('statusText');
@@ -13,7 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     contentEl.innerHTML = `
       <div class="empty-state">
         <div class="icon">📮</div>
-        <p>请先打开 <a href="https://web.slowly.app/" target="_blank" style="color:#667eea">web.slowly.app</a> 并登录<br>
+        <p>请先打开 <a href="https://web.slowly.app/" target="_blank" style="color:var(--primary)">web.slowly.app</a> 并登录<br>
         然后浏览好友和信件，数据将自动收集</p>
       </div>`;
     return;

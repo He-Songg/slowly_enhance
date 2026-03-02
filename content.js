@@ -44,6 +44,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     exportAllData().then(data => sendResponse(data));
     return true;
   }
+  if (msg.action === 'getAllStampMeta') {
+    SlowlyDB.getAllStampMeta().then(data => sendResponse(data));
+    return true;
+  }
+  if (msg.action === 'exportFriendData') {
+    exportFriendData(msg.friendId).then(data => sendResponse(data));
+    return true;
+  }
   if (msg.action === 'clearData') {
     Promise.all([
       SlowlyDB.clearStore('friends'),
@@ -375,6 +383,42 @@ async function computeOverview() {
     friendRanking: allStats.filter(f => f.letterCount > 0),
     hiddenList: hiddenStats,
     removedList: removedStats
+  };
+}
+
+async function exportFriendData(friendId) {
+  const friend = await SlowlyDB.get('friends', friendId);
+  const letters = await SlowlyDB.getLettersByFriend(friendId);
+  const myId = await resolveMyId(letters);
+
+  letters.sort((a, b) => (a.deliver_at || '').localeCompare(b.deliver_at || ''));
+
+  return {
+    exportDate: new Date().toISOString(),
+    myId,
+    friend: friend ? {
+      id: friend.id,
+      name: friend.name,
+      status: friend.status || 'normal',
+      country_code: friend.country_code,
+      location: friend.location,
+      created_at: friend.created_at
+    } : null,
+    letters: letters.map(l => ({
+      id: l.id,
+      friendId: l.friendId,
+      user: l.user,
+      userTo: l.userTo,
+      body: l.body,
+      stamp: l.stamp,
+      imageCount: l.imageCount || 0,
+      audioCount: l.audioCount || 0,
+      imageFiles: l.imageFiles || [],
+      audioFiles: l.audioFiles || [],
+      created_at: l.created_at,
+      deliver_at: l.deliver_at,
+      type: l.type
+    }))
   };
 }
 

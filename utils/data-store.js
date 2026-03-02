@@ -4,7 +4,7 @@
  */
 const SlowlyDB = (() => {
   const DB_NAME = 'SlowlyEnhanceDB';
-  const DB_VERSION = 2;
+  const DB_VERSION = 3;
   let dbInstance = null;
 
   function open() {
@@ -32,6 +32,9 @@ const SlowlyDB = (() => {
         }
         if (!db.objectStoreNames.contains('meta')) {
           db.createObjectStore('meta', { keyPath: 'key' });
+        }
+        if (!db.objectStoreNames.contains('stampMeta')) {
+          db.createObjectStore('stampMeta', { keyPath: 'slug' });
         }
       };
       req.onsuccess = (e) => {
@@ -245,6 +248,26 @@ const SlowlyDB = (() => {
 
     getMeta(key) {
       return get('meta', key);
+    },
+
+    saveStampMeta(items) {
+      const data = items.filter(i => i.slug).map(i => ({
+        slug: i.slug,
+        name: i.name || i.slug,
+        desc: i.desc || '',
+        country: i.country || '',
+        type: i.type || '',
+        group: i.item_group || ''
+      }));
+      return putBatch('stampMeta', data);
+    },
+
+    getStampMeta(slug) {
+      return get('stampMeta', slug).catch(() => null);
+    },
+
+    getAllStampMeta() {
+      return getAll('stampMeta').catch(() => []);
     }
   };
 })();
