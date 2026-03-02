@@ -497,6 +497,10 @@ function renderHeatmap(heatmap) {
 
 // ========== 邮票统计 ==========
 
+function stampImgUrl(name) {
+  return `https://cdn.getslowly.com/assets/images/stamp-sm/${name}.png`;
+}
+
 function renderStamps(adv) {
   if (!adv.stampRanking || adv.stampRanking.length === 0) return '';
 
@@ -504,7 +508,8 @@ function renderStamps(adv) {
 
   let items = top20.map(s => `
     <div class="stamp-item">
-      <span class="stamp-icon">🎫</span>
+      <img class="stamp-thumb" src="${stampImgUrl(s.name)}" alt="${escapeHtml(s.name)}" onerror="this.style.display='none';this.nextElementSibling.style.display='inline'">
+      <span class="stamp-icon" style="display:none">🎫</span>
       <span class="stamp-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span>
       <span class="stamp-count">${s.count}</span>
     </div>`).join('');
@@ -606,6 +611,7 @@ function renderWordTrend(wordTrend) {
 function countryCodeToFlag(code) {
   if (!code || code.length !== 2) return '🌍';
   const upper = code.toUpperCase();
+  if (upper === 'TW') return '🇨🇳';
   return String.fromCodePoint(...[...upper].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
 }
 
