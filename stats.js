@@ -79,7 +79,7 @@ function showOverview() {
   let html = `
     <div class="card">
       <div class="card-title">数据总览</div>
-      <div class="stat-row">
+      <div class="stat-row stat-row-3">
         <div class="stat-item">
           <div class="num">${data.totalLetters}</div>
           <div class="label">总信件数</div>
@@ -92,6 +92,8 @@ function showOverview() {
           <div class="num">${data.totalReceived}</div>
           <div class="label">收到</div>
         </div>
+      </div>
+      <div class="stat-row stat-row-3" style="margin-top:12px">
         <div class="stat-item">
           <div class="num">${formatNumber(data.totalWords)}</div>
           <div class="label">总字数</div>
@@ -105,7 +107,7 @@ function showOverview() {
           <div class="label">语音</div>
         </div>
       </div>
-      <div class="stat-row" style="margin-top:12px">
+      <div class="stat-row stat-row-3" style="margin-top:12px">
         <div class="stat-item">
           <div class="num">${data.totalFriends}</div>
           <div class="label">正常好友</div>
