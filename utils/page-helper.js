@@ -244,11 +244,11 @@ const SlowlyPageHelper = (() => {
     editorToolbar.id = 'se-editor-toolbar';
     editorToolbar.innerHTML = `
       <div id="se-editor-bar">
-        <button class="se-ed-btn" data-action="indent" title="在光标处插入8个空格缩进">⇥ 缩进</button>
+        <button class="se-ed-btn" data-action="indent" title="在光标处插入8个空格缩进 (Tab)">⇥ 缩进</button>
         <button class="se-ed-btn" data-action="indentAll" title="为每个段落添加段首缩进">¶ 全文缩进</button>
-        <button class="se-ed-btn" data-action="trimLines" title="将连续空行合并为一个">⊟ 清理空行</button>
+        <button class="se-ed-btn" data-action="trimLines" title="将连续空行合并为一个 (Ctrl+Shift+L)">⊟ 清理空行</button>
         <button class="se-ed-btn" data-action="trimSpaces" title="去除每行首尾多余空格">⊞ 清理空格</button>
-        <button class="se-ed-btn primary" data-action="formatAll" title="一键执行全文缩进+清理空行+清理空格">✨ 一键整理</button>
+        <button class="se-ed-btn primary" data-action="formatAll" title="一键执行全文缩进+清理空行+清理空格 (Ctrl+Shift+F)">✨ 一键整理</button>
       </div>
     `;
     document.body.appendChild(editorToolbar);
@@ -314,6 +314,21 @@ const SlowlyPageHelper = (() => {
         result = val.split('\n').map(line => line.trimEnd()).join('\n');
         break;
       }
+      case 'dedent': {
+        if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+          const start = el.selectionStart;
+          const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+          const linePrefix = val.substring(lineStart, start);
+          const spaces = linePrefix.match(/^ {1,8}/);
+          if (spaces) {
+            result = val.substring(0, lineStart) + val.substring(lineStart + spaces[0].length);
+            setEditorValue(el, result);
+            el.selectionStart = el.selectionEnd = Math.max(lineStart, start - spaces[0].length);
+            el.focus();
+          }
+        }
+        return;
+      }
       case 'formatAll': {
         let text = val;
         text = text.split('\n').map(line => line.trimEnd()).join('\n');
@@ -361,6 +376,32 @@ const SlowlyPageHelper = (() => {
           currentEditor = null;
         }
       }, 200);
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (!currentEditor) return;
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (e.key === 'Tab' && !e.shiftKey && !mod) {
+        e.preventDefault();
+        handleEditorAction('indent', currentEditor);
+        return;
+      }
+      if (e.key === 'Tab' && e.shiftKey && !mod) {
+        e.preventDefault();
+        handleEditorAction('dedent', currentEditor);
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        handleEditorAction('formatAll', currentEditor);
+        return;
+      }
+      if (mod && e.shiftKey && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        handleEditorAction('trimLines', currentEditor);
+        return;
+      }
     });
   }
 

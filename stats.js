@@ -1055,6 +1055,7 @@ function renderExportSection() {
       <div class="export-section">
         <button class="export-btn" id="exportJsonBtn">导出 JSON</button>
         <button class="export-btn" id="exportHtmlBtn">导出 HTML 存档</button>
+        <button class="export-btn" id="exportTxtBtn" style="background:#795548">导出 TXT</button>
         <button class="export-btn" id="exportCsvBtn" style="background:#4caf50">导出 CSV</button>
         <button class="export-btn" id="exportScreenshotBtn" style="background:#e65100">导出长图</button>
       </div>
@@ -1065,11 +1066,13 @@ function bindExportButtons(tabId) {
   setTimeout(() => {
     const jsonBtn = document.getElementById('exportJsonBtn');
     const htmlBtn = document.getElementById('exportHtmlBtn');
+    const txtBtn = document.getElementById('exportTxtBtn');
     const csvBtn = document.getElementById('exportCsvBtn');
     const ssBtn = document.getElementById('exportScreenshotBtn');
 
     if (jsonBtn) jsonBtn.addEventListener('click', () => doExportJson(tabId));
     if (htmlBtn) htmlBtn.addEventListener('click', () => doExportHtml(tabId));
+    if (txtBtn) txtBtn.addEventListener('click', () => doExportTxt(tabId));
     if (csvBtn) csvBtn.addEventListener('click', () => {
       if (cachedOverview) exportCSV(cachedOverview);
     });
@@ -1105,6 +1108,80 @@ async function doExportHtml(tabId) {
   }
   btn.textContent = '导出 HTML 存档';
   btn.disabled = false;
+}
+
+async function doExportTxt(tabId) {
+  const btn = document.getElementById('exportTxtBtn');
+  btn.textContent = '导出中...';
+  btn.disabled = true;
+  try {
+    const data = await sendToTab(tabId, { action: 'exportAllData' });
+    const txt = buildGlobalTxt(data);
+    downloadFile(txt, `slowly_all_${dateStamp()}.txt`, 'text/plain');
+  } catch(e) {
+    alert('导出失败: ' + e.message);
+  }
+  btn.textContent = '导出 TXT';
+  btn.disabled = false;
+}
+
+function buildGlobalTxt(data) {
+  const friendMap = {};
+  (data.friends || []).forEach(f => { friendMap[f.id] = f; });
+
+  const grouped = {};
+  (data.letters || []).forEach(l => {
+    const fid = l.friendId;
+    if (!grouped[fid]) grouped[fid] = [];
+    grouped[fid].push(l);
+  });
+
+  for (const fid of Object.keys(grouped)) {
+    grouped[fid].sort((a, b) => (a.deliver_at || '').localeCompare(b.deliver_at || ''));
+  }
+
+  const statusMap = { normal: '正常', hidden: '隐藏', removed: '已删除' };
+  const sortedFids = Object.keys(grouped).sort((a, b) => {
+    const na = friendMap[a]?.name || '';
+    const nb = friendMap[b]?.name || '';
+    return na.localeCompare(nb);
+  });
+
+  const lines = [];
+  lines.push('Slowly 全部信件记录');
+  lines.push(`导出时间: ${data.exportDate || ''}`);
+  lines.push(`共 ${data.friends?.length || 0} 位好友 · ${data.letters?.length || 0} 封信件`);
+  lines.push('='.repeat(60));
+  lines.push('');
+
+  for (const fid of sortedFids) {
+    const friend = friendMap[fid] || {};
+    const letters = grouped[fid];
+    const status = friend.status && friend.status !== 'normal' ? ` [${statusMap[friend.status] || friend.status}]` : '';
+    lines.push(`▎ ${friend.name || 'ID:' + fid}${status} — ${letters.length} 封信`);
+    lines.push('-'.repeat(60));
+    lines.push('');
+
+    for (const l of letters) {
+      const isMine = data.myId && l.user === data.myId;
+      const sender = isMine ? '我' : (friend.name || '对方');
+      const date = l.deliver_at ? l.deliver_at.substring(0, 16).replace('T', ' ') : '';
+      const stamp = l.stamp ? ` [邮票: ${l.stamp}]` : '';
+      const attach = [];
+      if (l.imageCount > 0) attach.push(`图片×${l.imageCount}`);
+      if (l.audioCount > 0) attach.push(`语音×${l.audioCount}`);
+      const attachStr = attach.length > 0 ? ` [${attach.join(', ')}]` : '';
+
+      lines.push(`--- ${sender} · ${date}${stamp}${attachStr} ---`);
+      lines.push('');
+      lines.push(l.body || '(无内容)');
+      lines.push('');
+    }
+
+    lines.push('');
+  }
+
+  return lines.join('\n');
 }
 
 function dateStamp() {
