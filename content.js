@@ -40,6 +40,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     computeAdvancedStats(msg.friendId).then(stats => sendResponse(stats));
     return true;
   }
+  if (msg.action === 'exportAllData') {
+    exportAllData().then(data => sendResponse(data));
+    return true;
+  }
   if (msg.action === 'clearData') {
     Promise.all([
       SlowlyDB.clearStore('friends'),
@@ -233,6 +237,42 @@ async function computeAdvancedStats(friendId) {
     }
   });
 
+  // 5. 回信速度趋势（按月统计平均回信时间）
+  const sorted = allLetters
+    .filter(l => l.deliver_at)
+    .sort((a, b) => a.deliver_at.localeCompare(b.deliver_at));
+  const replyTrend = {};
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = sorted[i - 1];
+    const curr = sorted[i];
+    if (!prev.friendId || prev.friendId !== curr.friendId) continue;
+    if (prev.user === curr.user) continue;
+    const diffHours = (new Date(curr.deliver_at) - new Date(prev.deliver_at)) / (1000 * 60 * 60);
+    if (diffHours <= 0 || diffHours > 720) continue;
+    const month = curr.deliver_at.substring(0, 7);
+    if (!replyTrend[month]) replyTrend[month] = { myTotal: 0, myCount: 0, friendTotal: 0, friendCount: 0 };
+    if (myId && curr.user === myId) {
+      replyTrend[month].myTotal += diffHours;
+      replyTrend[month].myCount++;
+    } else {
+      replyTrend[month].friendTotal += diffHours;
+      replyTrend[month].friendCount++;
+    }
+  }
+
+  // 6. 活跃时段分析（按小时统计写信数量）
+  const hourStats = { my: new Array(24).fill(0), friend: new Array(24).fill(0) };
+  allLetters.forEach(l => {
+    if (!l.created_at) return;
+    const hour = parseInt(l.created_at.substring(11, 13));
+    if (isNaN(hour)) return;
+    if (myId && l.user === myId) {
+      hourStats.my[hour]++;
+    } else {
+      hourStats.friend[hour]++;
+    }
+  });
+
   return {
     stampRanking,
     stampTotal: allLetters.filter(l => l.stamp).length,
@@ -240,7 +280,9 @@ async function computeAdvancedStats(friendId) {
     heatmap,
     wordTrend,
     countryFromFriends,
-    countryFromLetters
+    countryFromLetters,
+    replyTrend,
+    hourStats
   };
 }
 
@@ -333,5 +375,52 @@ async function computeOverview() {
     friendRanking: allStats.filter(f => f.letterCount > 0),
     hiddenList: hiddenStats,
     removedList: removedStats
+  };
+}
+
+async function exportAllData() {
+  const allFriends = await SlowlyDB.getAllFriends();
+  const allLetters = await SlowlyDB.getAllLetters();
+  const myId = await resolveMyId(allLetters);
+
+  const friendMap = {};
+  allFriends.forEach(f => { friendMap[f.id] = f; });
+
+  const lettersByFriend = {};
+  allLetters.forEach(l => {
+    if (!lettersByFriend[l.friendId]) lettersByFriend[l.friendId] = [];
+    lettersByFriend[l.friendId].push(l);
+  });
+
+  for (const fid of Object.keys(lettersByFriend)) {
+    lettersByFriend[fid].sort((a, b) => (a.deliver_at || '').localeCompare(b.deliver_at || ''));
+  }
+
+  return {
+    exportDate: new Date().toISOString(),
+    myId,
+    friends: allFriends.map(f => ({
+      id: f.id,
+      name: f.name,
+      status: f.status || 'normal',
+      country_code: f.country_code,
+      location: f.location,
+      created_at: f.created_at
+    })),
+    letters: allLetters.map(l => ({
+      id: l.id,
+      friendId: l.friendId,
+      friendName: friendMap[l.friendId]?.name || '',
+      user: l.user,
+      userTo: l.userTo,
+      body: l.body,
+      stamp: l.stamp,
+      imageCount: l.imageCount || 0,
+      audioCount: l.audioCount || 0,
+      created_at: l.created_at,
+      deliver_at: l.deliver_at,
+      type: l.type
+    })),
+    lettersByFriend
   };
 }

@@ -212,17 +212,14 @@ async function loadAdvancedOverview() {
     if (!adv) return;
     const container = document.getElementById('mainContent');
 
-    // 热力图
     container.insertAdjacentHTML('beforeend', renderHeatmap(adv.heatmap));
-
-    // 邮票统计
     container.insertAdjacentHTML('beforeend', renderStamps(adv));
-
-    // 信件长度趋势
     container.insertAdjacentHTML('beforeend', renderWordTrend(adv.wordTrend));
-
-    // 国家分布
+    container.insertAdjacentHTML('beforeend', renderReplyTrend(adv.replyTrend));
+    container.insertAdjacentHTML('beforeend', renderHourStats(adv.hourStats));
     container.insertAdjacentHTML('beforeend', renderCountryStats(adv));
+    container.insertAdjacentHTML('beforeend', renderExportSection());
+    bindExportButtons(tab.id);
   } catch(e) {
     console.warn('[Slowly Enhance] 高级统计加载失败:', e);
   }
@@ -357,6 +354,8 @@ async function loadAdvancedFriend(tabId, friendId) {
     container.insertAdjacentHTML('beforeend', renderHeatmap(adv.heatmap));
     container.insertAdjacentHTML('beforeend', renderStamps(adv));
     container.insertAdjacentHTML('beforeend', renderWordTrend(adv.wordTrend));
+    container.insertAdjacentHTML('beforeend', renderReplyTrend(adv.replyTrend));
+    container.insertAdjacentHTML('beforeend', renderHourStats(adv.hourStats));
   } catch(e) {
     console.warn('[Slowly Enhance] 好友高级统计加载失败:', e);
   }
@@ -613,6 +612,323 @@ function countryCodeToFlag(code) {
   const upper = code.toUpperCase();
   if (upper === 'TW') return '🇨🇳';
   return String.fromCodePoint(...[...upper].map(c => 0x1F1E6 + c.charCodeAt(0) - 65));
+}
+
+// ========== 回信速度趋势 ==========
+
+function renderReplyTrend(replyTrend) {
+  if (!replyTrend || Object.keys(replyTrend).length === 0) return '';
+
+  const months = Object.keys(replyTrend).sort();
+  const data = months.map(m => {
+    const d = replyTrend[m];
+    return {
+      month: m,
+      myAvg: d.myCount > 0 ? Math.round(d.myTotal / d.myCount * 10) / 10 : null,
+      friendAvg: d.friendCount > 0 ? Math.round(d.friendTotal / d.friendCount * 10) / 10 : null
+    };
+  });
+
+  const allVals = data.flatMap(d => [d.myAvg, d.friendAvg].filter(v => v !== null));
+  if (allVals.length === 0) return '';
+  const maxVal = Math.max(...allVals, 1);
+
+  const svgW = 800;
+  const svgH = 150;
+  const padL = 50;
+  const padR = 10;
+  const padT = 10;
+  const padB = 25;
+  const chartW = svgW - padL - padR;
+  const chartH = svgH - padT - padB;
+
+  function toX(i) { return padL + (i / Math.max(data.length - 1, 1)) * chartW; }
+  function toY(v) { return v === null ? null : padT + chartH - (v / maxVal) * chartH; }
+
+  function polyline(key, color) {
+    const pts = data
+      .map((d, i) => ({ x: toX(i), y: toY(d[key]) }))
+      .filter(p => p.y !== null);
+    if (pts.length < 2) return '';
+    return `<polyline points="${pts.map(p => `${p.x},${p.y}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+
+  function dots(key, color) {
+    return data.map((d, i) => {
+      const y = toY(d[key]);
+      if (y === null) return '';
+      const label = formatHours(d[key]);
+      return `<circle cx="${toX(i)}" cy="${y}" r="3" fill="${color}"><title>${d.month}: ${label}</title></circle>`;
+    }).join('');
+  }
+
+  const xLabels = data.map((d, i) => {
+    if (data.length <= 12 || i % Math.ceil(data.length / 12) === 0) {
+      return `<text x="${toX(i)}" y="${svgH - 2}" text-anchor="middle" font-size="10" fill="#999">${d.month.substring(2)}</text>`;
+    }
+    return '';
+  }).join('');
+
+  function formatYLabel(hours) {
+    if (hours < 24) return hours + 'h';
+    return (hours / 24).toFixed(0) + 'd';
+  }
+
+  const gridLines = [0, 0.25, 0.5, 0.75, 1].map(pct => {
+    const y = padT + chartH * (1 - pct);
+    const val = maxVal * pct;
+    return `<line x1="${padL}" y1="${y}" x2="${svgW - padR}" y2="${y}" stroke="#eee" stroke-width="1"/>
+            <text x="${padL - 4}" y="${y + 4}" text-anchor="end" font-size="10" fill="#bbb">${formatYLabel(val)}</text>`;
+  }).join('');
+
+  return `
+    <div class="card">
+      <div class="card-title">⏱️ 回信速度趋势（月均）</div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#667eea"></div> 我的回信速度</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> 对方回信速度</div>
+      </div>
+      <svg class="trend-svg" viewBox="0 0 ${svgW} ${svgH}" preserveAspectRatio="none">
+        ${gridLines}
+        ${polyline('myAvg', '#667eea')}
+        ${polyline('friendAvg', '#f59e0b')}
+        ${dots('myAvg', '#667eea')}
+        ${dots('friendAvg', '#f59e0b')}
+        ${xLabels}
+      </svg>
+    </div>`;
+}
+
+// ========== 活跃时段分析 ==========
+
+function renderHourStats(hourStats) {
+  if (!hourStats) return '';
+  const maxVal = Math.max(...hourStats.my, ...hourStats.friend, 1);
+
+  const bars = [];
+  for (let h = 0; h < 24; h++) {
+    const myH = (hourStats.my[h] / maxVal * 100).toFixed(1);
+    const friendH = (hourStats.friend[h] / maxVal * 100).toFixed(1);
+    const label = h % 3 === 0 ? `${String(h).padStart(2, '0')}` : '';
+    const myTip = hourStats.my[h];
+    const friendTip = hourStats.friend[h];
+    bars.push(`
+      <div class="hour-bar-group" title="${h}:00 - 我:${myTip}封 对方:${friendTip}封">
+        <div class="hour-bar-stack" style="height:100%">
+          <div style="flex:1"></div>
+          <div class="hour-bar-friend" style="height:${friendH}%"></div>
+          <div class="hour-bar-mine" style="height:${myH}%;border-radius:${friendH === '0.0' ? '3px 3px 0 0' : '0'}"></div>
+        </div>
+        <span class="hour-label">${label}</span>
+      </div>`);
+  }
+
+  const myTotal = hourStats.my.reduce((a, b) => a + b, 0);
+  const friendTotal = hourStats.friend.reduce((a, b) => a + b, 0);
+  const myPeak = hourStats.my.indexOf(Math.max(...hourStats.my));
+  const friendPeak = hourStats.friend.indexOf(Math.max(...hourStats.friend));
+
+  return `
+    <div class="card">
+      <div class="card-title">🕐 活跃时段分析</div>
+      <div class="stat-row" style="margin-bottom:16px">
+        <div class="stat-item">
+          <div class="num">${String(myPeak).padStart(2, '0')}:00</div>
+          <div class="label">我最活跃时段</div>
+        </div>
+        <div class="stat-item">
+          <div class="num">${String(friendPeak).padStart(2, '0')}:00</div>
+          <div class="label">对方最活跃时段</div>
+        </div>
+        <div class="stat-item">
+          <div class="num">${myTotal}</div>
+          <div class="label">我写的信</div>
+        </div>
+        <div class="stat-item">
+          <div class="num">${friendTotal}</div>
+          <div class="label">对方写的信</div>
+        </div>
+      </div>
+      <div class="legend">
+        <div class="legend-item"><div class="legend-dot" style="background:#667eea"></div> 我</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> 对方</div>
+      </div>
+      <div class="hour-chart">${bars.join('')}</div>
+    </div>`;
+}
+
+// ========== 数据导出 ==========
+
+function renderExportSection() {
+  return `
+    <div class="card">
+      <div class="card-title">💾 数据备份与导出</div>
+      <p style="font-size:13px;color:#666;margin-bottom:16px">将所有收集到的信件数据导出为文件，方便备份或在其他工具中分析。</p>
+      <div class="export-section">
+        <button class="export-btn" id="exportJsonBtn">导出 JSON</button>
+        <button class="export-btn" id="exportHtmlBtn">导出 HTML 存档</button>
+        <button class="export-btn" id="exportCsvBtn" style="background:#4caf50">导出 CSV</button>
+      </div>
+    </div>`;
+}
+
+function bindExportButtons(tabId) {
+  setTimeout(() => {
+    const jsonBtn = document.getElementById('exportJsonBtn');
+    const htmlBtn = document.getElementById('exportHtmlBtn');
+    const csvBtn = document.getElementById('exportCsvBtn');
+
+    if (jsonBtn) jsonBtn.addEventListener('click', () => doExportJson(tabId));
+    if (htmlBtn) htmlBtn.addEventListener('click', () => doExportHtml(tabId));
+    if (csvBtn) csvBtn.addEventListener('click', () => {
+      if (cachedOverview) exportCSV(cachedOverview);
+    });
+  }, 100);
+}
+
+async function doExportJson(tabId) {
+  const btn = document.getElementById('exportJsonBtn');
+  btn.textContent = '导出中...';
+  btn.disabled = true;
+  try {
+    const data = await sendToTab(tabId, { action: 'exportAllData' });
+    const json = JSON.stringify(data, null, 2);
+    downloadFile(json, `slowly_backup_${dateStamp()}.json`, 'application/json');
+  } catch(e) {
+    alert('导出失败: ' + e.message);
+  }
+  btn.textContent = '导出 JSON';
+  btn.disabled = false;
+}
+
+async function doExportHtml(tabId) {
+  const btn = document.getElementById('exportHtmlBtn');
+  btn.textContent = '导出中...';
+  btn.disabled = true;
+  try {
+    const data = await sendToTab(tabId, { action: 'exportAllData' });
+    const html = buildHtmlArchive(data);
+    downloadFile(html, `slowly_archive_${dateStamp()}.html`, 'text/html');
+  } catch(e) {
+    alert('导出失败: ' + e.message);
+  }
+  btn.textContent = '导出 HTML 存档';
+  btn.disabled = false;
+}
+
+function dateStamp() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: mimeType + ';charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function buildHtmlArchive(data) {
+  const friendMap = {};
+  (data.friends || []).forEach(f => { friendMap[f.id] = f; });
+
+  const grouped = {};
+  (data.letters || []).forEach(l => {
+    const fid = l.friendId;
+    if (!grouped[fid]) grouped[fid] = [];
+    grouped[fid].push(l);
+  });
+
+  for (const fid of Object.keys(grouped)) {
+    grouped[fid].sort((a, b) => (a.deliver_at || '').localeCompare(b.deliver_at || ''));
+  }
+
+  let sections = '';
+  const sortedFids = Object.keys(grouped).sort((a, b) => {
+    const na = friendMap[a]?.name || '';
+    const nb = friendMap[b]?.name || '';
+    return na.localeCompare(nb);
+  });
+
+  for (const fid of sortedFids) {
+    const friend = friendMap[fid] || {};
+    const letters = grouped[fid];
+    const statusBadge = friend.status === 'hidden' ? ' <span class="badge hidden">隐藏</span>'
+      : friend.status === 'removed' ? ' <span class="badge removed">已删除</span>' : '';
+
+    let letterHtml = '';
+    for (const l of letters) {
+      const isMine = data.myId && l.user === data.myId;
+      const sender = isMine ? '我' : (friend.name || '对方');
+      const cls = isMine ? 'mine' : 'theirs';
+      const stamp = l.stamp ? `<span class="stamp">🎫 ${esc(l.stamp)}</span>` : '';
+      const attach = [];
+      if (l.imageCount > 0) attach.push(`🖼️×${l.imageCount}`);
+      if (l.audioCount > 0) attach.push(`🎵×${l.audioCount}`);
+      const attachStr = attach.length > 0 ? `<span class="attach">${attach.join(' ')}</span>` : '';
+      const body = esc(l.body || '').replace(/\n/g, '<br>');
+      const date = l.deliver_at ? l.deliver_at.substring(0, 16).replace('T', ' ') : '';
+
+      letterHtml += `
+        <div class="letter ${cls}">
+          <div class="letter-head">
+            <strong>${esc(sender)}</strong>
+            <span class="date">${date}</span>
+            ${stamp}${attachStr}
+          </div>
+          <div class="letter-body">${body}</div>
+        </div>`;
+    }
+
+    sections += `
+      <div class="friend-section">
+        <h2>${esc(friend.name || 'ID:' + fid)}${statusBadge}
+          <span class="count">${letters.length} 封信</span>
+        </h2>
+        ${letterHtml}
+      </div>`;
+  }
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Slowly 信件存档 - ${data.exportDate?.substring(0, 10) || ''}</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#f5f6fa;color:#333;padding:24px;max-width:800px;margin:0 auto}
+h1{font-size:22px;color:#667eea;margin-bottom:8px}
+.meta{font-size:13px;color:#999;margin-bottom:32px}
+.friend-section{margin-bottom:40px}
+.friend-section h2{font-size:17px;color:#555;border-bottom:2px solid #667eea;padding-bottom:8px;margin-bottom:16px}
+.friend-section h2 .count{font-size:12px;color:#999;font-weight:400;margin-left:8px}
+.badge{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:400}
+.badge.hidden{background:#fff3e0;color:#ff9800}
+.badge.removed{background:#ffebee;color:#f44336}
+.letter{padding:16px;margin-bottom:12px;border-radius:12px;border-left:4px solid #ddd}
+.letter.mine{background:#f0f4ff;border-left-color:#667eea}
+.letter.theirs{background:#fff9f0;border-left-color:#f59e0b}
+.letter-head{font-size:12px;color:#888;margin-bottom:8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.letter-head strong{color:#333}
+.date{color:#aaa}
+.stamp{background:#f3e8ff;color:#7c3aed;padding:1px 6px;border-radius:4px;font-size:11px}
+.attach{font-size:11px;color:#666}
+.letter-body{font-size:14px;line-height:1.7;white-space:pre-wrap;word-break:break-word}
+</style>
+</head>
+<body>
+<h1>Slowly 信件存档</h1>
+<div class="meta">导出时间: ${data.exportDate || ''} · 共 ${data.friends?.length || 0} 位好友 · ${data.letters?.length || 0} 封信件</div>
+${sections}
+</body>
+</html>`;
+}
+
+function esc(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function renderCountryStats(adv) {
