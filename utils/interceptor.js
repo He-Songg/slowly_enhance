@@ -131,6 +131,10 @@ const SlowlyInterceptor = (() => {
       return;
     }
 
+    window.dispatchEvent(new CustomEvent('slowly-enhance-active-friend', {
+      detail: { friendId }
+    }));
+
     // 打印信件字段详情（仅一次）
     if (!letterFieldsLogged && letters.length > 0) {
       console.log('[Slowly Enhance] 📋 ====== 信件字段调试信息 ======');
@@ -148,6 +152,13 @@ const SlowlyInterceptor = (() => {
       letterFieldsLogged = true;
     }
 
+    // 每页打印 type 分布，辅助定位语音信件编码规则
+    const typeDist = {};
+    letters.forEach(l => {
+      const t = String(l?.type ?? 'null');
+      typeDist[t] = (typeDist[t] || 0) + 1;
+    });
+
     if (data.post && data.user) {
       try {
         const post = data.post;
@@ -160,11 +171,11 @@ const SlowlyInterceptor = (() => {
       } catch (e) {}
     }
 
-    await SlowlyDB.saveLetters(friendId, letters);
+    const saveStats = await SlowlyDB.saveLetters(friendId, letters);
     notifyCollection('letters', letters.length);
 
     const page = data.comments?.current_page || '?';
-    console.log(`[Slowly Enhance] ✓ 已收集好友 ${friendId} 第 ${page} 页的 ${letters.length} 封信件`);
+    console.log(`[Slowly Enhance] ✓ 已收集好友 ${friendId} 第 ${page} 页的 ${letters.length} 封信件（图片:${saveStats?.imageCount || 0}，语音:${saveStats?.audioCount || 0}，type分布:${JSON.stringify(typeDist)}）`);
   }
 
   async function processMe(data) {

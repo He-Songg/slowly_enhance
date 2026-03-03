@@ -5,6 +5,7 @@
 const SlowlyPageHelper = (() => {
   let indicator = null;
   let collectCount = { friends: 0, letters: 0 };
+  let activeFriendId = null;
 
   function createIndicator() {
     if (indicator) return;
@@ -182,6 +183,64 @@ const SlowlyPageHelper = (() => {
         if (btn) btn.textContent = '快速翻页 ▼';
       }
     }, 300);
+  }
+
+  // ========== 已加载附件缓存（方案二） ==========
+
+  function getMediaTypeByUrl(url = '') {
+    const low = String(url).toLowerCase();
+    if (!low || low.startsWith('blob:') || low.startsWith('data:')) return '';
+    if (/\.(jpg|jpeg|png|gif|webp|bmp|svg|heic|avif)(\?|$)/i.test(low) || /image/i.test(low)) return 'image';
+    if (/\.(mp3|m4a|aac|ogg|wav|opus|flac|amr|3gp|weba|caf|aif|aiff)(\?|$)/i.test(low) || /(\/audio\/|voice|record)/i.test(low)) return 'audio';
+    return '';
+  }
+
+  function cacheMediaUrl(url) {
+    const type = getMediaTypeByUrl(url);
+    if (!type || !SlowlyDB?.saveLoadedMedia) return;
+    SlowlyDB.saveLoadedMedia(url, type, activeFriendId).catch(() => {});
+  }
+
+  function scanNodeForMedia(node) {
+    if (!node || node.nodeType !== 1) return;
+    const root = node;
+    const src = root.getAttribute && root.getAttribute('src');
+    if (src) cacheMediaUrl(src);
+    if (root.querySelectorAll) {
+      root.querySelectorAll('img[src],audio[src],source[src]').forEach(el => {
+        const u = el.getAttribute('src');
+        if (u) cacheMediaUrl(u);
+      });
+    }
+  }
+
+  function watchLoadedMedia() {
+    scanNodeForMedia(document.body);
+
+    document.addEventListener('load', (e) => {
+      const el = e.target;
+      if (!el || !el.tagName) return;
+      if (el.tagName === 'IMG' || el.tagName === 'AUDIO' || el.tagName === 'SOURCE') {
+        const u = el.getAttribute('src') || el.src;
+        if (u) cacheMediaUrl(u);
+      }
+    }, true);
+
+    const obs = new MutationObserver(mutations => {
+      mutations.forEach(m => {
+        if (m.type === 'attributes' && m.attributeName === 'src') {
+          const u = m.target?.getAttribute?.('src') || m.target?.src;
+          if (u) cacheMediaUrl(u);
+        }
+        m.addedNodes?.forEach(n => scanNodeForMedia(n));
+      });
+    });
+    obs.observe(document.documentElement || document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['src']
+    });
   }
 
   // ========== 编辑器工具栏 ==========
@@ -409,10 +468,12 @@ const SlowlyPageHelper = (() => {
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
         createIndicator();
+        watchLoadedMedia();
         watchForEditor();
       });
     } else {
       createIndicator();
+      watchLoadedMedia();
       watchForEditor();
     }
 
@@ -421,6 +482,10 @@ const SlowlyPageHelper = (() => {
       updateStats(total.friends || 0, total.letters || 0);
       showCollecting();
       setTimeout(hideCollecting, 2000);
+    });
+    window.addEventListener('slowly-enhance-active-friend', (e) => {
+      const fid = e?.detail?.friendId;
+      if (fid != null) activeFriendId = String(fid);
     });
   }
 

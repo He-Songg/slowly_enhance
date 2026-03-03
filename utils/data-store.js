@@ -4,7 +4,7 @@
  */
 const SlowlyDB = (() => {
   const DB_NAME = 'SlowlyEnhanceDB';
-  const DB_VERSION = 3;
+  const DB_VERSION = 5;
   let dbInstance = null;
 
   function open() {
@@ -35,6 +35,20 @@ const SlowlyDB = (() => {
         }
         if (!db.objectStoreNames.contains('stampMeta')) {
           db.createObjectStore('stampMeta', { keyPath: 'slug' });
+        }
+        if (!db.objectStoreNames.contains('mediaCache')) {
+          const mediaStore = db.createObjectStore('mediaCache', { keyPath: 'filename' });
+          mediaStore.createIndex('type', 'type', { unique: false });
+          mediaStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+        } else {
+          const tx = e.target.transaction;
+          const mediaStore = tx.objectStore('mediaCache');
+          if (!mediaStore.indexNames.contains('type')) {
+            mediaStore.createIndex('type', 'type', { unique: false });
+          }
+          if (!mediaStore.indexNames.contains('updatedAt')) {
+            mediaStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+          }
         }
       };
       req.onsuccess = (e) => {
@@ -126,8 +140,8 @@ const SlowlyDB = (() => {
     });
   }
 
-  const IMAGE_EXT = /\.(jpg|jpeg|png|gif|webp|bmp|svg|heic)$/i;
-  const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|wav|opus|flac|amr|3gp)$/i;
+  const IMAGE_EXT = /\.(jpg|jpeg|png|gif|webp|bmp|svg|heic|avif)$/i;
+  const AUDIO_EXT = /\.(mp3|m4a|aac|ogg|wav|opus|flac|amr|3gp|weba|caf|aif|aiff)$/i;
 
   function parseAttachmentString(raw) {
     if (!raw) return [];
@@ -142,7 +156,83 @@ const SlowlyDB = (() => {
         return raw.split(',').map(s => s.trim()).filter(Boolean);
       }
     }
+    if (typeof raw === 'object') {
+      if (Array.isArray(raw.files)) return raw.files;
+      if (Array.isArray(raw.attachments)) return raw.attachments;
+      if (Array.isArray(raw.items)) return raw.items;
+      return [raw];
+    }
     return [];
+  }
+
+  function isAudioLike(name = '', mime = '', type = '') {
+    const lowName = String(name).toLowerCase();
+    const lowMime = String(mime).toLowerCase();
+    const lowType = String(type).toLowerCase();
+    if (AUDIO_EXT.test(lowName)) return true;
+    if (lowMime.startsWith('audio/')) return true;
+    if (/(voice|audio|record|recording|sound|m4a|aac|amr|opus|wav|mp3|weba|ogg)/i.test(lowType)) return true;
+    if (/(\/audio\/|voice|record|recording|amr|opus|m4a|weba|\.mp3(\?|$)|\.wav(\?|$)|\.ogg(\?|$))/i.test(lowName)) return true;
+    return false;
+  }
+
+  function isImageLike(name = '', mime = '', type = '') {
+    const lowName = String(name).toLowerCase();
+    const lowMime = String(mime).toLowerCase();
+    const lowType = String(type).toLowerCase();
+    if (IMAGE_EXT.test(lowName)) return true;
+    if (lowMime.startsWith('image/')) return true;
+    if (/(image|photo|picture|thumbnail|thumb)/i.test(lowType)) return true;
+    return false;
+  }
+
+  function pickAttachmentMeta(f) {
+    if (typeof f === 'string') {
+      return { name: f, mime: '', type: '' };
+    }
+    if (!f || typeof f !== 'object') {
+      return { name: '', mime: '', type: '' };
+    }
+    const name = f.name || f.url || f.file || f.path || f.src || f.filename || f.key || '';
+    const mime = f.mime || f.mimeType || f.content_type || f.contentType || f.media_type || '';
+    const type = f.type || f.file_type || f.kind || f.category || '';
+    return { name, mime, type };
+  }
+
+  function uniqStrings(arr) {
+    return Array.from(new Set((arr || []).map(s => String(s || '').trim()).filter(Boolean)));
+  }
+
+  function extractBodyAudioTokens(text) {
+    if (!text || typeof text !== 'string') return [];
+    const tokens = [];
+    const patterns = [
+      /https?:\/\/[^\s"'<>]+?\.(mp3|m4a|aac|ogg|wav|opus|flac|amr|3gp|weba|caf|aif|aiff)(\?[^\s"'<>]*)?/ig,
+      /\/audio\/[^\s"'<>]+/ig,
+      /[A-Za-z0-9_\-/]+?\.(mp3|m4a|aac|ogg|wav|opus|flac|amr|3gp|weba|caf|aif|aiff)(\?[^\s"'<>]*)?/ig
+    ];
+    patterns.forEach(re => {
+      const m = text.match(re);
+      if (m) tokens.push(...m);
+    });
+    return uniqStrings(tokens);
+  }
+
+  function normalizeMediaFilename(input) {
+    const raw = String(input || '').trim();
+    if (!raw || raw.startsWith('type:')) return '';
+    let value = raw;
+    try {
+      if (/^https?:\/\//i.test(raw)) {
+        const u = new URL(raw);
+        value = u.pathname.split('/').pop() || '';
+      }
+    } catch (e) {}
+    value = value.split('?')[0].split('#')[0];
+    try {
+      value = decodeURIComponent(value);
+    } catch (e) {}
+    return value.trim();
   }
 
   function classifyAttachments(raw) {
@@ -151,17 +241,89 @@ const SlowlyDB = (() => {
     const audio = [];
     const other = [];
     for (const f of files) {
-      const name = typeof f === 'string' ? f : (f?.name || f?.url || f?.file || '');
-      if (AUDIO_EXT.test(name)) {
+      const { name, mime, type } = pickAttachmentMeta(f);
+      if (isAudioLike(name, mime, type)) {
         audio.push(name);
-      } else if (IMAGE_EXT.test(name) || name.length > 0) {
-        // 默认当作图片（Slowly 附件主要是图片）
+      } else if (isImageLike(name, mime, type)) {
+        images.push(name);
+      } else if (name.length > 0) {
+        // 历史兼容：未知类型但有附件名时，仍按图片计数，避免旧统计回退
         images.push(name);
       } else {
         other.push(name);
       }
     }
     return { images, audio, other, all: files };
+  }
+
+  function scanMediaFieldsFromLetter(letter) {
+    const candidates = [];
+    const seenObj = new WeakSet();
+
+    function shouldScanKey(k = '') {
+      return /(attach|audio|voice|sound|media|file|url|path|resource|mime|content)/i.test(k);
+    }
+
+    function walk(node, parentKey = '') {
+      if (node == null) return;
+      const t = typeof node;
+      if (t === 'string' || t === 'number' || t === 'boolean') {
+        if (parentKey && shouldScanKey(parentKey)) candidates.push(String(node));
+        return;
+      }
+      if (Array.isArray(node)) {
+        node.forEach(item => walk(item, parentKey));
+        return;
+      }
+      if (t === 'object') {
+        if (seenObj.has(node)) return;
+        seenObj.add(node);
+        Object.entries(node).forEach(([k, v]) => {
+          if (shouldScanKey(k)) {
+            if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
+              candidates.push(String(v));
+            } else {
+              walk(v, k);
+            }
+          } else if (typeof v === 'object' && v !== null) {
+            // 继续往下找，避免遗漏嵌套字段
+            walk(v, k);
+          }
+        });
+      }
+    }
+
+    walk(letter || {});
+
+    // 聚合常见候选字段（即使 key 不命中也尝试）
+    const directFields = [
+      letter?.attachments, letter?.attachment, letter?.files, letter?.file,
+      letter?.audio, letter?.voice, letter?.media, letter?.resources,
+      letter?.extra, letter?.style
+    ];
+    directFields.forEach(v => {
+      const arr = parseAttachmentString(v);
+      arr.forEach(item => {
+        if (typeof item === 'string') candidates.push(item);
+        else if (item && typeof item === 'object') {
+          const meta = pickAttachmentMeta(item);
+          if (meta.name) candidates.push(meta.name);
+          if (meta.mime) candidates.push(meta.mime);
+          if (meta.type) candidates.push(meta.type);
+        }
+      });
+    });
+
+    const dedup = Array.from(new Set(candidates.map(s => String(s).trim()).filter(Boolean)));
+    const images = [];
+    const audio = [];
+    const other = [];
+    dedup.forEach(text => {
+      if (isAudioLike(text, text, text)) audio.push(text);
+      else if (isImageLike(text, text, text)) images.push(text);
+      else other.push(text);
+    });
+    return { images, audio, other, all: dedup };
   }
 
   return {
@@ -196,7 +358,25 @@ const SlowlyDB = (() => {
       const items = letters.filter(l => l && l.id).map(l => {
         // attachments 实际格式: 逗号分隔的文件名字符串
         // 例: "49643353-5451959-1772038003_VabaRT5RGz_n.jpg,49643353-5451959-xxx.m4a"
-        const classified = classifyAttachments(l.attachments);
+        const fromAttachments = classifyAttachments(l.attachments);
+        const fromRaw = scanMediaFieldsFromLetter(l);
+        const bodyAudio = extractBodyAudioTokens(l.body || '');
+        const imageFiles = uniqStrings([...(fromAttachments.images || []), ...(fromRaw.images || [])]);
+        const audioFiles = uniqStrings([...(fromAttachments.audio || []), ...(fromRaw.audio || []), ...bodyAudio]);
+        const typeNum = Number(l.type);
+        const bodyEmpty = !(l.body || '').trim();
+        const attachEmpty = !String(l.attachments || '').trim();
+        // Slowly web 观测：type=5 对应语音消息（同一好友样本与实际语音数量对齐）
+        if (typeNum === 5 && audioFiles.length === 0) {
+          audioFiles.push(`type:5:${l.id || ''}`);
+        }
+        if (
+          audioFiles.length === 0
+          && (typeNum === 3 || typeNum === 4 || typeNum === 5)
+          && (bodyEmpty || attachEmpty)
+        ) {
+          audioFiles.push(`type:${typeNum}`);
+        }
 
         return {
           id: l.id,
@@ -204,10 +384,10 @@ const SlowlyDB = (() => {
           user: l.user,
           userTo: l.user_to,
           body: l.body || '',
-          imageFiles: classified.images,
-          audioFiles: classified.audio,
-          imageCount: classified.images.length,
-          audioCount: classified.audio.length,
+          imageFiles,
+          audioFiles,
+          imageCount: imageFiles.length,
+          audioCount: audioFiles.length,
           stamp: l.stamp || null,
           created_at: l.created_at,
           deliver_at: l.deliver_at,
@@ -216,7 +396,13 @@ const SlowlyDB = (() => {
           raw: l
         };
       });
-      return putBatch('letters', items);
+      const pageImageCount = items.reduce((s, it) => s + (it.imageCount || 0), 0);
+      const pageAudioCount = items.reduce((s, it) => s + (it.audioCount || 0), 0);
+      return putBatch('letters', items).then(() => ({
+        savedCount: items.length,
+        imageCount: pageImageCount,
+        audioCount: pageAudioCount
+      }));
     },
 
     getLettersByFriend(friendId) {
@@ -268,6 +454,48 @@ const SlowlyDB = (() => {
 
     getAllStampMeta() {
       return getAll('stampMeta').catch(() => []);
+    },
+
+    saveLoadedMedia(url, type = 'unknown', friendId = null) {
+      const filename = normalizeMediaFilename(url);
+      if (!filename) return Promise.resolve(null);
+      return get('mediaCache', filename).catch(() => null).then(existing => {
+        const friendIds = Array.isArray(existing?.friendIds) ? [...existing.friendIds] : [];
+        if (friendId != null && friendId !== '') {
+          const fid = String(friendId);
+          if (!friendIds.includes(fid)) friendIds.push(fid);
+        }
+        const next = {
+          filename,
+          type: type || existing?.type || 'unknown',
+          url: url || existing?.url || '',
+          seenCount: (existing?.seenCount || 0) + 1,
+          friendIds,
+          createdAt: existing?.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+        return put('mediaCache', next).then(() => next);
+      });
+    },
+
+    getLoadedMediaByFilenames(filenames) {
+      const list = uniqStrings((filenames || []).map(normalizeMediaFilename)).filter(Boolean);
+      if (list.length === 0) return Promise.resolve([]);
+      return Promise.all(list.map(name => get('mediaCache', name).catch(() => null)))
+        .then(rows => rows.filter(Boolean));
+    },
+
+    getLoadedMediaByFriend(friendId, type = '') {
+      const fid = String(friendId || '');
+      if (!fid) return Promise.resolve([]);
+      return getAll('mediaCache').then(items => {
+        return (items || []).filter(it => {
+          const matchFriend = Array.isArray(it.friendIds) && it.friendIds.includes(fid);
+          if (!matchFriend) return false;
+          if (!type) return true;
+          return it.type === type;
+        });
+      }).catch(() => []);
     }
   };
 })();

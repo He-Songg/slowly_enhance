@@ -888,6 +888,24 @@ function renderHourStats(hourStats) {
 
 const WF_COLORS = ['#667eea','#f59e0b','#10b981','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316','#6366f1','#14b8a6','#0ea5e9','#d946ef','#84cc16','#fb7185'];
 
+function wfSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return Math.abs(h >>> 0);
+}
+
+function wfRand(seed) {
+  let x = (seed || 1) % 2147483647;
+  if (x <= 0) x += 2147483646;
+  return () => {
+    x = (x * 16807) % 2147483647;
+    return (x - 1) / 2147483646;
+  };
+}
+
 function drawWordCloud(canvas, words) {
   if (!words || words.length === 0) return;
   const dpr = window.devicePixelRatio || 1;
@@ -898,23 +916,29 @@ function drawWordCloud(canvas, words) {
   ctx.clearRect(0, 0, W, H);
 
   const maxC = words[0].count, minC = words[words.length - 1].count;
-  const sizeMin = 12, sizeMax = Math.min(48, H * 0.14);
+  const sizeMin = 11, sizeMax = Math.min(52, H * 0.16);
   const placed = [];
+  const rng = wfRand(wfSeed(words.map(w => `${w.word}:${w.count}`).join('|')));
+  const anglePool = [-70, -55, -40, -25, -12, 0, 0, 0, 0, 12, 25, 40, 55, 70];
 
   const items = words.map((w, i) => {
     const ratio = maxC === minC ? 1 : (w.count - minC) / (maxC - minC);
-    const fontSize = sizeMin + ratio * (sizeMax - sizeMin);
-    const weight = ratio > 0.5 ? 'bold' : 'normal';
-    const vertical = (i % 4 === 0);
-    const color = WF_COLORS[i % WF_COLORS.length];
-    return { word: w.word, count: w.count, fontSize, weight, vertical, color, x: 0, y: 0, w: 0, h: 0 };
+    const scaled = Math.pow(ratio, 0.62);
+    const fontSize = sizeMin + scaled * (sizeMax - sizeMin);
+    const weight = ratio > 0.7 ? '700' : ratio > 0.35 ? '600' : '500';
+    const angle = anglePool[Math.floor(rng() * anglePool.length)];
+    const color = WF_COLORS[(i + Math.floor(rng() * 7)) % WF_COLORS.length];
+    return { word: w.word, count: w.count, fontSize, weight, angle, color, x: 0, y: 0, w: 0, h: 0, baseW: 0, baseH: 0 };
   });
 
   items.forEach(item => {
     ctx.font = `${item.weight} ${item.fontSize}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif`;
     const tm = ctx.measureText(item.word);
-    if (item.vertical) { item.w = item.fontSize * 1.2; item.h = tm.width + 4; }
-    else { item.w = tm.width + 4; item.h = item.fontSize * 1.2; }
+    item.baseW = tm.width + 6;
+    item.baseH = item.fontSize * 1.25;
+    const rad = Math.abs(item.angle) * Math.PI / 180;
+    item.w = Math.abs(item.baseW * Math.cos(rad)) + Math.abs(item.baseH * Math.sin(rad));
+    item.h = Math.abs(item.baseW * Math.sin(rad)) + Math.abs(item.baseH * Math.cos(rad));
   });
 
   function overlaps(a) {
@@ -928,11 +952,11 @@ function drawWordCloud(canvas, words) {
   items.forEach(item => {
     item.x = cx - item.w / 2; item.y = cy - item.h / 2;
     if (!overlaps(item)) { placed.push(item); return; }
-    for (let t = 0; t < 1500; t++) {
-      const angle = t * 0.15;
-      const r = 3 + t * 0.45;
+    for (let t = 0; t < 2200; t++) {
+      const angle = t * (0.11 + rng() * 0.03);
+      const r = 2 + t * (0.35 + rng() * 0.14);
       item.x = cx + r * Math.cos(angle) - item.w / 2;
-      item.y = cy + r * Math.sin(angle) * 0.7 - item.h / 2;
+      item.y = cy + r * Math.sin(angle) * (0.62 + rng() * 0.16) - item.h / 2;
       if (item.x >= 0 && item.y >= 0 && item.x + item.w <= W && item.y + item.h <= H && !overlaps(item)) {
         placed.push(item); return;
       }
@@ -947,13 +971,9 @@ function drawWordCloud(canvas, words) {
     ctx.font = `${item.weight} ${item.fontSize}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif`;
     ctx.fillStyle = item.color;
     ctx.textBaseline = 'top';
-    if (item.vertical) {
-      ctx.translate(item.x + item.w, item.y);
-      ctx.rotate(Math.PI / 2);
-      ctx.fillText(item.word, 2, 0);
-    } else {
-      ctx.fillText(item.word, item.x + 2, item.y + 2);
-    }
+    ctx.translate(item.x + item.w / 2, item.y + item.h / 2);
+    ctx.rotate(item.angle * Math.PI / 180);
+    ctx.fillText(item.word, -item.baseW / 2 + 2, -item.baseH / 2 + 1);
     ctx.restore();
   });
 
@@ -1198,6 +1218,113 @@ function downloadFile(content, filename, mimeType) {
   URL.revokeObjectURL(url);
 }
 
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function sanitizePathSegment(v) {
+  return String(v || 'unknown').replace(/[\\/:*?"<>|]/g, '_').trim() || 'unknown';
+}
+
+function inferExtByMime(mime) {
+  const m = String(mime || '').toLowerCase();
+  if (m.includes('jpeg')) return '.jpg';
+  if (m.includes('png')) return '.png';
+  if (m.includes('gif')) return '.gif';
+  if (m.includes('webp')) return '.webp';
+  if (m.includes('svg')) return '.svg';
+  if (m.includes('mp3')) return '.mp3';
+  if (m.includes('m4a') || m.includes('mp4')) return '.m4a';
+  if (m.includes('aac')) return '.aac';
+  if (m.includes('ogg')) return '.ogg';
+  if (m.includes('wav')) return '.wav';
+  if (m.includes('opus')) return '.opus';
+  if (m.includes('flac')) return '.flac';
+  return '';
+}
+
+function pickAttachmentFilename(item, idx, contentType = '') {
+  let filename = String(item.filename || '').split('?')[0].split('#')[0].trim();
+  if (!filename || filename.startsWith('type:')) {
+    const ext = inferExtByMime(contentType) || (item.type === 'audio' ? '.m4a' : '.jpg');
+    filename = `${item.type}_${String(idx + 1).padStart(4, '0')}${ext}`;
+  } else if (!/\.[a-z0-9]{2,5}$/i.test(filename)) {
+    filename += inferExtByMime(contentType);
+  }
+  return sanitizePathSegment(filename);
+}
+
+function toBytes(v) {
+  if (v instanceof Uint8Array) return v;
+  return new TextEncoder().encode(String(v || ''));
+}
+
+function crc32(bytes) {
+  let crc = -1;
+  for (let i = 0; i < bytes.length; i++) {
+    crc ^= bytes[i];
+    for (let j = 0; j < 8; j++) {
+      const mask = -(crc & 1);
+      crc = (crc >>> 1) ^ (0xEDB88320 & mask);
+    }
+  }
+  return (crc ^ -1) >>> 0;
+}
+
+function dateToDos(dt = new Date()) {
+  const year = Math.max(1980, dt.getFullYear());
+  const dosTime = ((dt.getHours() & 31) << 11) | ((dt.getMinutes() & 63) << 5) | ((Math.floor(dt.getSeconds() / 2)) & 31);
+  const dosDate = (((year - 1980) & 127) << 9) | (((dt.getMonth() + 1) & 15) << 5) | (dt.getDate() & 31);
+  return { dosTime, dosDate };
+}
+
+function buildZipBlob(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  const u16 = n => new Uint8Array([n & 255, (n >>> 8) & 255]);
+  const u32 = n => new Uint8Array([n & 255, (n >>> 8) & 255, (n >>> 16) & 255, (n >>> 24) & 255]);
+
+  entries.forEach(e => {
+    const nameBytes = toBytes(e.path);
+    const data = toBytes(e.data);
+    const { dosTime, dosDate } = dateToDos(e.date || new Date());
+    const crc = crc32(data);
+    const size = data.length;
+
+    const localHeader = [
+      u32(0x04034b50), u16(20), u16(0), u16(0), u16(dosTime), u16(dosDate),
+      u32(crc), u32(size), u32(size), u16(nameBytes.length), u16(0), nameBytes
+    ];
+    localParts.push(...localHeader, data);
+
+    const centralHeader = [
+      u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(dosTime), u16(dosDate),
+      u32(crc), u32(size), u32(size), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes
+    ];
+    centralParts.push(...centralHeader);
+
+    offset += localHeader.reduce((s, p) => s + p.length, 0) + data.length;
+  });
+
+  const centralSize = centralParts.reduce((s, p) => s + p.length, 0);
+  const centralOffset = localParts.reduce((s, p) => s + p.length, 0);
+  const end = [
+    u32(0x06054b50), u16(0), u16(0),
+    u16(entries.length), u16(entries.length),
+    u32(centralSize), u32(centralOffset), u16(0)
+  ];
+
+  return new Blob([...localParts, ...centralParts, ...end], { type: 'application/zip' });
+}
+
 async function doExportScreenshot(prefix) {
   const target = document.getElementById('mainContent');
   if (!target || typeof html2canvas === 'undefined') {
@@ -1362,11 +1489,17 @@ function renderFriendExportSection(friendId) {
   return `
     <div class="card">
       <div class="card-title">💾 导出此好友数据</div>
-      <p style="font-size:13px;color:var(--text-muted);margin-bottom:16px">将与此好友的所有信件导出为文件。</p>
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:10px">
+        将与此好友的所有信件导出为文件。
+      </p>
+      <p id="friendLoadedMediaCount" style="font-size:12px;color:var(--text-muted);margin-bottom:16px">
+        可打包附件：加载中...
+      </p>
       <div class="export-section">
         <button class="export-btn" id="friendExportJsonBtn">导出 JSON</button>
         <button class="export-btn" id="friendExportHtmlBtn">导出 HTML</button>
         <button class="export-btn" id="friendExportTxtBtn" style="background:#4caf50">导出 TXT</button>
+        <button class="export-btn" id="friendExportLoadedMediaBtn" style="background:#795548">导出已加载附件 ZIP（仅图片）</button>
         <button class="export-btn" id="friendExportScreenshotBtn" style="background:#e65100">导出长图</button>
       </div>
     </div>`;
@@ -1377,17 +1510,34 @@ function bindFriendExportButtons(tabId, friendId) {
     const jsonBtn = document.getElementById('friendExportJsonBtn');
     const htmlBtn = document.getElementById('friendExportHtmlBtn');
     const txtBtn = document.getElementById('friendExportTxtBtn');
+    const loadedMediaBtn = document.getElementById('friendExportLoadedMediaBtn');
     const ssBtn = document.getElementById('friendExportScreenshotBtn');
 
     if (jsonBtn) jsonBtn.addEventListener('click', () => doFriendExportJson(tabId, friendId));
     if (htmlBtn) htmlBtn.addEventListener('click', () => doFriendExportHtml(tabId, friendId));
     if (txtBtn) txtBtn.addEventListener('click', () => doFriendExportTxt(tabId, friendId));
+    if (loadedMediaBtn) loadedMediaBtn.addEventListener('click', () => doFriendExportLoadedMedia(tabId, friendId));
+    refreshFriendLoadedMediaCount(tabId, friendId);
     if (ssBtn) {
       const friend = cachedOverview.friendRanking?.find(f => f.id === friendId);
       const fname = friend?.name || friendId;
       ssBtn.addEventListener('click', () => doExportScreenshot(`slowly_${fname}`));
     }
   }, 100);
+}
+
+async function refreshFriendLoadedMediaCount(tabId, friendId) {
+  const el = document.getElementById('friendLoadedMediaCount');
+  if (!el) return;
+  try {
+    const data = await sendToTab(tabId, { action: 'exportLoadedAttachments', friendId });
+    const items = Array.isArray(data?.items) ? data.items : [];
+    const imageCount = items.filter(i => i.type === 'image').length;
+    const audioCount = items.filter(i => i.type === 'audio').length;
+    el.textContent = `可打包附件：图片 ${imageCount} 张，语音 ${audioCount} 条（语音导出暂未启用）`;
+  } catch (e) {
+    el.textContent = '可打包附件：读取失败';
+  }
 }
 
 async function doFriendExportJson(tabId, friendId) {
@@ -1435,6 +1585,60 @@ async function doFriendExportTxt(tabId, friendId) {
     alert('导出失败: ' + e.message);
   }
   btn.textContent = '导出 TXT';
+  btn.disabled = false;
+}
+
+async function doFriendExportLoadedMedia(tabId, friendId) {
+  const btn = document.getElementById('friendExportLoadedMediaBtn');
+  btn.textContent = '导出中...';
+  btn.disabled = true;
+  try {
+    const data = await sendToTab(tabId, { action: 'exportLoadedAttachments', friendId });
+    const name = data.friend?.name || friendId;
+    const imageItems = (data.items || []).filter(it => it.type === 'image');
+    if (!imageItems || imageItems.length === 0) {
+      const tip = `没有可导出的已加载附件。\n请先在 Slowly 页面打开该好友的信件并让图片/语音实际加载后重试。`;
+      alert(tip);
+    } else {
+      const ok = confirm(
+        `已识别可导出图片 ${imageItems.length} 张。\n` +
+        `是否继续打包为 ZIP（按日期/发送方分目录）？`
+      );
+      if (ok) {
+        const entries = [];
+        const failed = [];
+        for (let i = 0; i < imageItems.length; i++) {
+          const it = imageItems[i];
+          btn.textContent = `打包中 ${i + 1}/${imageItems.length}`;
+          try {
+            const resp = await fetch(it.url, { credentials: 'include' });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob = await resp.blob();
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            const dateSeg = sanitizePathSegment((it.deliverAt || '').slice(0, 10) || 'unknown-date');
+            const senderSeg = it.sender === 'me' ? '我发出' : '对方发出';
+            const typeSeg = it.type === 'audio' ? '语音' : '图片';
+            const fileName = pickAttachmentFilename(it, i, blob.type || resp.headers.get('content-type') || '');
+            const fullPath = `${dateSeg}/${sanitizePathSegment(senderSeg)}/${sanitizePathSegment(typeSeg)}/${fileName}`;
+            entries.push({ path: fullPath, data: bytes, date: it.deliverAt ? new Date(it.deliverAt.replace(' ', 'T')) : new Date() });
+          } catch (e) {
+            failed.push({ ...it, error: String(e.message || e) });
+          }
+        }
+
+        if (entries.length === 0) {
+          alert('没有可成功下载并打包的附件。请确认附件已在页面实际加载，并且链接仍可访问。');
+        } else {
+          const zipBlob = buildZipBlob(entries);
+          downloadBlob(zipBlob, `slowly_${sanitizePathSegment(name)}_images_${dateStamp()}.zip`);
+          alert(`打包完成：成功 ${entries.length} 张图片${failed.length ? `，失败 ${failed.length}` : ''}`);
+        }
+      }
+    }
+  } catch (e) {
+    alert('导出失败: ' + e.message);
+  }
+  btn.textContent = '导出已加载附件 ZIP（仅图片）';
   btn.disabled = false;
 }
 

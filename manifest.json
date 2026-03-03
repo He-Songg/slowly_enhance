@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Slowly Enhance - 信件统计助手",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "为 Slowly Web 提供信件数据统计功能：信件数量、文字数、图片、语音等",
   "permissions": [
     "storage"

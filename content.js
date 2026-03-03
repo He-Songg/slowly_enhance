@@ -52,6 +52,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     exportFriendData(msg.friendId).then(data => sendResponse(data));
     return true;
   }
+  if (msg.action === 'exportLoadedAttachments') {
+    exportLoadedAttachments(msg.friendId).then(data => sendResponse(data));
+    return true;
+  }
   if (msg.action === 'getWordFreq') {
     computeWordFreq(msg.friendId).then(data => sendResponse(data));
     return true;
@@ -60,17 +64,51 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     Promise.all([
       SlowlyDB.clearStore('friends'),
       SlowlyDB.clearStore('letters'),
-      SlowlyDB.clearStore('meta')
+      SlowlyDB.clearStore('meta'),
+      SlowlyDB.clearStore('mediaCache').catch(() => {})
     ]).then(() => sendResponse({ success: true }));
     return true;
   }
 });
 
+function parseLegacyAttachments(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.map(x => String(x || ''));
+  if (typeof raw === 'string') {
+    const s = raw.trim();
+    if (!s) return [];
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) return parsed.map(x => String(x || ''));
+    } catch (e) {}
+    return s.split(',').map(x => x.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 function countLetterAttachments(letter) {
-  return {
-    images: letter.imageCount || 0,
-    audio: letter.audioCount || 0
-  };
+  let images = letter.imageCount || 0;
+  let audio = letter.audioCount || 0;
+
+  if (images === 0 || audio === 0) {
+    const items = parseLegacyAttachments(letter.raw?.attachments);
+    if (items.length) {
+      let i = 0, a = 0;
+      items.forEach(name => {
+        const low = String(name).toLowerCase();
+        if (/\.(mp3|m4a|aac|ogg|wav|opus|flac|amr|3gp|weba|caf|aif|aiff)(\?|$)/i.test(low)
+          || /(\/audio\/|voice|record|recording)/i.test(low)) {
+          a++;
+        } else {
+          i++;
+        }
+      });
+      if (images === 0) images = i;
+      if (audio === 0) audio = a;
+    }
+  }
+
+  return { images, audio };
 }
 
 async function resolveMyId(letters) {
@@ -439,7 +477,7 @@ function buildFreqMap(wordArrays) {
   return Object.entries(freq)
     .filter(([, c]) => c >= 2)
     .sort((a, b) => b[1] - a[1])
-    .slice(0, 30)
+    .slice(0, 60)
     .map(([word, count]) => ({ word, count }));
 }
 
@@ -500,6 +538,87 @@ async function exportFriendData(friendId) {
       deliver_at: l.deliver_at,
       type: l.type
     }))
+  };
+}
+
+async function exportLoadedAttachments(friendId) {
+  const friend = await SlowlyDB.get('friends', friendId);
+  const letters = await SlowlyDB.getLettersByFriend(friendId);
+  const myId = await resolveMyId(letters);
+  letters.sort((a, b) => (a.deliver_at || '').localeCompare(b.deliver_at || ''));
+
+  const refs = [];
+  letters.forEach(l => {
+    const sender = (myId && l.user === myId) ? 'me' : 'friend';
+    (l.imageFiles || []).forEach(name => {
+      if (!name || String(name).startsWith('type:')) return;
+      refs.push({
+        filename: String(name),
+        type: 'image',
+        letterId: l.id,
+        deliverAt: l.deliver_at || '',
+        sender
+      });
+    });
+    (l.audioFiles || []).forEach(name => {
+      if (!name) return;
+      refs.push({
+        filename: String(name),
+        type: 'audio',
+        letterId: l.id,
+        deliverAt: l.deliver_at || '',
+        sender
+      });
+    });
+  });
+
+  const uniqFiles = [...new Set(refs.map(r => r.filename).filter(n => !String(n).startsWith('type:')))];
+  const loaded = await SlowlyDB.getLoadedMediaByFilenames(uniqFiles);
+  const loadedMap = {};
+  loaded.forEach(m => {
+    loadedMap[m.filename] = m;
+  });
+
+  const loadedAudioByFriend = await SlowlyDB.getLoadedMediaByFriend(friendId, 'audio');
+  const freeAudioPool = (loadedAudioByFriend || []).slice()
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+    .filter(x => x.url);
+  const usedAudioUrl = new Set();
+
+  const attachments = refs.map(r => {
+    const mapped = loadedMap[r.filename];
+    if (mapped?.url) {
+      usedAudioUrl.add(mapped.url);
+      return {
+        ...r,
+        url: mapped.url,
+        seenCount: mapped.seenCount || 0,
+        cachedAt: mapped.updatedAt || ''
+      };
+    }
+    if (r.type === 'audio' && String(r.filename).startsWith('type:')) {
+      const candidate = freeAudioPool.find(x => !usedAudioUrl.has(x.url));
+      if (candidate) {
+        usedAudioUrl.add(candidate.url);
+        return {
+          ...r,
+          filename: candidate.filename || r.filename,
+          url: candidate.url,
+          seenCount: candidate.seenCount || 0,
+          cachedAt: candidate.updatedAt || ''
+        };
+      }
+    }
+    return { ...r, url: '', seenCount: 0, cachedAt: '' };
+  }).filter(x => !!x.url);
+
+  return {
+    exportDate: new Date().toISOString(),
+    friend: friend ? { id: friend.id, name: friend.name } : { id: friendId, name: String(friendId) },
+    totalRefs: refs.length,
+    uniqueRefs: uniqFiles.length,
+    loadedCount: attachments.length,
+    items: attachments
   };
 }
 
