@@ -7,6 +7,11 @@ const POPUP_THEMES = {
 };
 
 function applyPopupTheme(themeId) {
+  if (themeId === 'system') {
+    const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    applyPopupTheme(dark ? 'dark' : 'purple');
+    return;
+  }
   const vars = POPUP_THEMES[themeId];
   if (!vars) return;
   const root = document.documentElement;
@@ -26,6 +31,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   const statusText = document.getElementById('statusText');
   const btnStats = document.getElementById('btnStats');
   const btnClear = document.getElementById('btnClear');
+  const btnOpenSlowly = document.getElementById('btnOpenSlowly');
+  const lastCollectedText = document.getElementById('lastCollectedText');
+
+  if (btnOpenSlowly) {
+    btnOpenSlowly.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://web.slowly.app/' });
+    });
+  }
 
   const tab = await getSlowlyTab();
 
@@ -45,13 +58,21 @@ document.addEventListener('DOMContentLoaded', async () => {
   statusText.textContent = 'Slowly 页面已连接';
 
   try {
+    const cs = await sendToTab(tab.id, { action: 'getCollectionStatus' }).catch(() => null);
+    if (cs?.lastCollectedAt && lastCollectedText) {
+      lastCollectedText.style.display = 'block';
+      lastCollectedText.textContent = `数据截止于：${formatDateTime(cs.lastCollectedAt)}`;
+    }
     const overview = await sendToTab(tab.id, { action: 'getOverview' });
     renderOverview(overview);
   } catch (err) {
     contentEl.innerHTML = `
       <div class="empty-state">
         <div class="icon">📮</div>
-        <p>暂无数据<br>请在 Slowly 中浏览好友和信件<br>数据将在浏览时自动收集</p>
+        <p>暂无数据，按以下步骤开始收集：<br>
+        1）打开 Slowly 并登录<br>
+        2）进入好友列表（Friends）<br>
+        3）进入任意好友对话并下拉/翻页加载历史信件</p>
       </div>`;
   }
 
@@ -66,12 +87,29 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
 });
 
+function animateValue(el, to, formatter, durationMs = 550) {
+  const start = performance.now();
+  const from = 0;
+  const fmt = formatter || (v => String(v));
+  function tick(now) {
+    const t = Math.min(1, (now - start) / durationMs);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const v = Math.round(from + (to - from) * eased);
+    el.textContent = fmt(v);
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
 function renderOverview(data) {
   if (!data || data.totalLetters === 0) {
     document.getElementById('content').innerHTML = `
       <div class="empty-state">
         <div class="icon">📮</div>
-        <p>暂无数据<br>请在 Slowly 中浏览好友和信件<br>数据将在浏览时自动收集</p>
+        <p>暂无数据，按以下步骤开始收集：<br>
+        1）打开 Slowly 并登录<br>
+        2）进入好友列表（Friends）<br>
+        3）进入任意好友对话并下拉/翻页加载历史信件</p>
       </div>`;
     return;
   }
@@ -80,7 +118,7 @@ function renderOverview(data) {
     <div class="stat-grid">
       <div class="stat-card">
         <div class="label">总信件数</div>
-        <div class="value">${data.totalLetters}</div>
+        <div class="value" data-anim="num" data-raw="${data.totalLetters}" data-kind="int">0</div>
       </div>
       <div class="stat-card">
         <div class="label">收 / 发</div>
@@ -88,7 +126,7 @@ function renderOverview(data) {
       </div>
       <div class="stat-card">
         <div class="label">总字数</div>
-        <div class="value">${formatNumber(data.totalWords)}</div>
+        <div class="value" data-anim="num" data-raw="${data.totalWords}" data-kind="word">0</div>
       </div>
       <div class="stat-card">
         <div class="label">图片 / 语音</div>
@@ -98,7 +136,7 @@ function renderOverview(data) {
     <div class="stat-grid" style="margin-top:0">
       <div class="stat-card">
         <div class="label">正常好友</div>
-        <div class="value">${data.totalFriends}</div>
+        <div class="value" data-anim="num" data-raw="${data.totalFriends}" data-kind="int">0</div>
       </div>
       <div class="stat-card">
         <div class="label">隐藏 / 删除</div>
@@ -135,6 +173,13 @@ function renderOverview(data) {
   html += '</div>';
   document.getElementById('content').innerHTML = html;
 
+  document.querySelectorAll('[data-anim="num"]').forEach(el => {
+    const raw = Number(el.dataset.raw || '0');
+    const kind = el.dataset.kind || 'int';
+    const fmt = kind === 'word' ? formatNumber : (v => String(v));
+    animateValue(el, Number.isFinite(raw) ? raw : 0, fmt);
+  });
+
   document.querySelectorAll('.friend-item').forEach(el => {
     el.addEventListener('click', () => {
       const friendId = el.dataset.id;
@@ -147,6 +192,17 @@ function renderOverview(data) {
     linkAll.addEventListener('click', () => {
       chrome.runtime.sendMessage({ action: 'openStats' });
     });
+  }
+}
+
+function formatDateTime(iso) {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return String(iso);
   }
 }
 

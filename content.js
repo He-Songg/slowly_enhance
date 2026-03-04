@@ -26,12 +26,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.action === 'getCollectionStatus') {
     Promise.all([
       SlowlyDB.getAllFriends(),
-      SlowlyDB.getLetterCount()
-    ]).then(([friends, letterCount]) => {
+      SlowlyDB.getLetterCount(),
+      SlowlyDB.getMeta('lastCollectedAt').catch(() => null)
+    ]).then(([friends, letterCount, lastCollectedAt]) => {
       sendResponse({
         friendCount: friends.length,
         letterCount,
-        collected: SlowlyInterceptor.getCollectedCount()
+        collected: SlowlyInterceptor.getCollectedCount(),
+        lastCollectedAt: lastCollectedAt?.value?.at || null
       });
     });
     return true;

@@ -172,6 +172,9 @@ const SlowlyInterceptor = (() => {
     }
 
     const saveStats = await SlowlyDB.saveLetters(friendId, letters);
+    try {
+      await SlowlyDB.saveMeta('lastCollectedAt', { at: new Date().toISOString(), friendId });
+    } catch (e) {}
     notifyCollection('letters', letters.length);
 
     const page = data.comments?.current_page || '?';

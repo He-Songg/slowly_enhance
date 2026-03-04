@@ -45,6 +45,26 @@
       font-size: 12px;
       color: #666;
     }
+    .status-bar .right {
+      margin-left: auto;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .status-link {
+      font-size: 11px;
+      color: var(--primary);
+      cursor: pointer;
+      text-decoration: none;
+      user-select: none;
+    }
+    .status-link:hover { text-decoration: underline; }
+
+    .last-collected {
+      padding: 8px 20px 0 20px;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
     .status-dot {
       width: 8px;
       height: 8px;
@@ -197,7 +217,11 @@
   <div class="status-bar">
     <div class="status-dot" id="statusDot"></div>
     <span id="statusText">检测中...</span>
+    <div class="right">
+      <a class="status-link" id="btnOpenSlowly">打开 Slowly</a>
+    </div>
   </div>
+  <div class="last-collected" id="lastCollectedText" style="display:none"></div>
 
   <div id="content">
     <div class="empty-state">

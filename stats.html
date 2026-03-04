@@ -430,6 +430,32 @@
       font-size: 14px;
     }
 
+    .skeleton {
+      position: relative;
+      overflow: hidden;
+      background: rgba(0,0,0,0.03);
+      border-radius: 10px;
+    }
+    .skeleton::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.65), transparent);
+      animation: sk 1.2s infinite;
+    }
+    @keyframes sk {
+      100% { transform: translateX(100%); }
+    }
+    .sk-line { height: 12px; margin: 10px 0; }
+    .sk-title { height: 18px; width: 220px; margin: 8px 0 14px; }
+    .sk-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+    }
+    .sk-card { height: 88px; }
+
     .export-btn {
       padding: 8px 20px;
       background: var(--primary);

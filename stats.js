@@ -4,6 +4,11 @@ let currentView = 'overview';
 let stampMetaMap = {};
 
 const THEMES = {
+  system: {
+    label: '跟随系统',
+    color: 'linear-gradient(135deg, #111 0%, #111 50%, #f3f4f6 50%, #f3f4f6 100%)',
+    vars: null
+  },
   purple: {
     label: '蓝紫',
     color: '#667eea',
@@ -31,9 +36,29 @@ const THEMES = {
   }
 };
 
+let _systemThemeMql = null;
+let _currentThemeId = 'purple';
+
+function getSystemPreferredThemeId() {
+  const mql = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
+  return mql && mql.matches ? 'dark' : 'purple';
+}
+
 function applyTheme(themeId) {
+  _currentThemeId = themeId;
+  if (themeId === 'system') {
+    const resolved = getSystemPreferredThemeId();
+    applyTheme(resolved);
+    _currentThemeId = 'system';
+    chrome.storage.local.set({ theme: 'system' });
+    document.querySelectorAll('.theme-dot').forEach(d => {
+      d.classList.toggle('active', d.dataset.theme === 'system');
+    });
+    return;
+  }
+
   const theme = THEMES[themeId];
-  if (!theme) return;
+  if (!theme || !theme.vars) return;
   const root = document.documentElement;
   for (const [prop, val] of Object.entries(theme.vars)) {
     root.style.setProperty(prop, val);
@@ -47,9 +72,10 @@ function applyTheme(themeId) {
 function renderThemeSwitcher() {
   const container = document.getElementById('themeSwitcher');
   if (!container) return;
-  container.innerHTML = Object.entries(THEMES).map(([id, t]) =>
-    `<div class="theme-dot" data-theme="${id}" style="background:${t.color}" title="${t.label}"></div>`
-  ).join('');
+  container.innerHTML = Object.entries(THEMES).map(([id, t]) => {
+    const bg = id === 'system' ? `background:${t.color};border-color:rgba(255,255,255,0.55)` : `background:${t.color}`;
+    return `<div class="theme-dot" data-theme="${id}" style="${bg}" title="${t.label}"></div>`;
+  }).join('');
   container.querySelectorAll('.theme-dot').forEach(dot => {
     dot.addEventListener('click', () => applyTheme(dot.dataset.theme));
   });
@@ -61,6 +87,14 @@ function getThemeColor() {
 
 async function initTheme() {
   renderThemeSwitcher();
+  if (!_systemThemeMql && window.matchMedia) {
+    _systemThemeMql = window.matchMedia('(prefers-color-scheme: dark)');
+    _systemThemeMql.addEventListener?.('change', () => {
+      if (_currentThemeId === 'system') {
+        applyTheme('system');
+      }
+    });
+  }
   try {
     const result = await chrome.storage.local.get('theme');
     applyTheme(result.theme || 'purple');
@@ -69,21 +103,56 @@ async function initTheme() {
   }
 }
 
+function animateNumber(el, to, formatter, durationMs = 650) {
+  const from = 0;
+  const start = performance.now();
+  const fmt = formatter || (v => String(v));
+
+  function tick(now) {
+    const t = Math.min(1, (now - start) / durationMs);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const v = Math.round(from + (to - from) * eased);
+    el.textContent = fmt(v);
+    if (t < 1) requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+}
+
+function animateOverviewNumbers(scopeEl) {
+  if (!scopeEl) return;
+  scopeEl.querySelectorAll('[data-anim="num"]').forEach(el => {
+    const raw = Number(el.dataset.raw || '0');
+    const kind = el.dataset.kind || 'int';
+    const fmt = kind === 'word' ? formatNumber : (v => String(v));
+    animateNumber(el, Number.isFinite(raw) ? raw : 0, fmt);
+  });
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
   const params = new URLSearchParams(location.search);
   const friendId = params.get('friendId');
 
+  document.getElementById('mainContent').innerHTML = renderSkeletonPage();
+
   const tab = await getSlowlyTab();
   if (!tab) {
     document.getElementById('mainContent').innerHTML =
-      '<div class="empty-msg">请先打开 web.slowly.app 并浏览信件以收集数据</div>';
+      `<div class="empty-msg">请先打开 web.slowly.app 并登录，然后按以下步骤收集数据：<br><br>
+      1）进入好友列表（Friends）<br>
+      2）进入任意好友对话页面<br>
+      3）下拉/翻页加载历史信件（可用右下角“快速翻页”加速）</div>`;
     return;
   }
 
   try {
+    const cs = await sendToTab(tab.id, { action: 'getCollectionStatus' }).catch(() => null);
     cachedOverview = await sendToTab(tab.id, { action: 'getOverview' });
     renderTabs(cachedOverview, friendId);
+    if (cs?.lastCollectedAt) {
+      const base = document.getElementById('topSub').textContent || '';
+      document.getElementById('topSub').textContent = `${base} · 数据截止于 ${formatDateTime(cs.lastCollectedAt)}`;
+    }
 
     if (friendId) {
       await showFriendDetail(tab.id, parseInt(friendId));
@@ -92,7 +161,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   } catch (err) {
     document.getElementById('mainContent').innerHTML =
-      '<div class="empty-msg">数据加载失败，请确保已在 Slowly 中浏览过信件</div>';
+      `<div class="empty-msg">数据加载失败。请确保已在 Slowly 中浏览过信件后重试。<br><br>
+      1）进入好友列表（Friends）<br>
+      2）进入任意好友对话页面<br>
+      3）下拉/翻页加载历史信件</div>`;
   }
 });
 
@@ -130,7 +202,10 @@ function showOverview() {
   const data = cachedOverview;
   if (!data || data.totalLetters === 0) {
     document.getElementById('mainContent').innerHTML =
-      '<div class="empty-msg">暂无数据，请在 Slowly 中浏览好友信件</div>';
+      `<div class="empty-msg">暂无数据，按以下步骤开始收集：<br><br>
+      1）进入好友列表（Friends）<br>
+      2）进入任意好友对话页面<br>
+      3）下拉/翻页加载历史信件（可用右下角“快速翻页”加速）</div>`;
     return;
   }
 
@@ -149,43 +224,43 @@ function showOverview() {
       <div class="card-title">数据总览</div>
       <div class="stat-row stat-row-3">
         <div class="stat-item">
-          <div class="num">${data.totalLetters}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalLetters}" data-kind="int">0</div>
           <div class="label">总信件数</div>
         </div>
         <div class="stat-item">
-          <div class="num">${data.totalSent}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalSent}" data-kind="int">0</div>
           <div class="label">发出</div>
         </div>
         <div class="stat-item">
-          <div class="num">${data.totalReceived}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalReceived}" data-kind="int">0</div>
           <div class="label">收到</div>
         </div>
       </div>
       <div class="stat-row stat-row-3" style="margin-top:12px">
         <div class="stat-item">
-          <div class="num">${formatNumber(data.totalWords)}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalWords}" data-kind="word">0</div>
           <div class="label">总字数</div>
         </div>
         <div class="stat-item">
-          <div class="num">${data.totalImages}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalImages}" data-kind="int">0</div>
           <div class="label">图片</div>
         </div>
         <div class="stat-item">
-          <div class="num">${data.totalAudio}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalAudio}" data-kind="int">0</div>
           <div class="label">语音</div>
         </div>
       </div>
       <div class="stat-row stat-row-3" style="margin-top:12px">
         <div class="stat-item">
-          <div class="num">${data.totalFriends}</div>
+          <div class="num" data-anim="num" data-raw="${data.totalFriends}" data-kind="int">0</div>
           <div class="label">正常好友</div>
         </div>
         <div class="stat-item">
-          <div class="num">${hiddenCount}</div>
+          <div class="num" data-anim="num" data-raw="${hiddenCount}" data-kind="int">0</div>
           <div class="label">隐藏好友</div>
         </div>
         <div class="stat-item">
-          <div class="num">${removedCount}</div>
+          <div class="num" data-anim="num" data-raw="${removedCount}" data-kind="int">0</div>
           <div class="label">已删除好友</div>
         </div>
       </div>
@@ -265,6 +340,7 @@ function showOverview() {
   }
 
   document.getElementById('mainContent').innerHTML = html;
+  animateOverviewNumbers(document.getElementById('mainContent'));
 
   const exportBtn = document.getElementById('exportBtn');
   if (exportBtn) {
@@ -272,6 +348,39 @@ function showOverview() {
   }
 
   loadAdvancedOverview();
+}
+
+function renderSkeletonPage() {
+  return `
+    <div class="card">
+      <div class="skeleton sk-title"></div>
+      <div class="sk-grid">
+        <div class="skeleton sk-card"></div>
+        <div class="skeleton sk-card"></div>
+        <div class="skeleton sk-card"></div>
+        <div class="skeleton sk-card"></div>
+        <div class="skeleton sk-card"></div>
+        <div class="skeleton sk-card"></div>
+      </div>
+    </div>
+    <div class="card">
+      <div class="skeleton sk-title" style="width:180px"></div>
+      <div class="skeleton sk-line"></div>
+      <div class="skeleton sk-line"></div>
+      <div class="skeleton sk-line"></div>
+    </div>
+  `;
+}
+
+function formatDateTime(iso) {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  } catch {
+    return String(iso);
+  }
 }
 
 async function loadAdvancedOverview() {
@@ -302,6 +411,7 @@ async function loadAdvancedOverview() {
 }
 
 async function showFriendDetail(tabId, friendId) {
+  document.getElementById('mainContent').innerHTML = renderSkeletonPage();
   if (!cachedFriendStats[friendId]) {
     cachedFriendStats[friendId] = await sendToTab(tabId, { action: 'getStats', friendId });
   }
@@ -309,7 +419,10 @@ async function showFriendDetail(tabId, friendId) {
   const stats = cachedFriendStats[friendId];
   if (!stats) {
     document.getElementById('mainContent').innerHTML =
-      '<div class="empty-msg">该好友暂无信件数据，请在 Slowly 中浏览该好友的信件</div>';
+      `<div class="empty-msg">该好友暂无信件数据，按以下步骤收集：<br><br>
+      1）在 Slowly 中打开该好友对话页面<br>
+      2）下拉/翻页加载历史信件（可用右下角“快速翻页”加速）<br>
+      3）回到统计页刷新查看</div>`;
     return;
   }
 
@@ -557,7 +670,7 @@ function renderHeatmap(heatmap) {
     const colors = ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127'];
     const tip = d ? `${ds}: ${d.sent}封发出, ${d.received}封收到` : ds;
 
-    cells.push(`<div class="hm-cell" style="background:${colors[level]};grid-row:${day + 1}" title="${tip}"><span class="hm-tip">${tip}</span></div>`);
+    cells.push({ level, day, tip });
 
     cur.setDate(cur.getDate() + 1);
     if (cur.getDay() === 0) weekIdx++;
@@ -570,14 +683,15 @@ function renderHeatmap(heatmap) {
     return `<span style="position:absolute;left:${leftPx}px">${m.label}</span>`;
   }).join('');
 
+  const htmlId = 'hm_' + Math.random().toString(16).slice(2);
+  setTimeout(() => initHeatmapAsync(htmlId, cells, totalWeeks, gridWidth, months, maxCount), 0);
+
   return `
     <div class="card">
       <div class="card-title">📅 通信热力图</div>
       <div class="heatmap-wrap">
-        <div style="position:relative;height:18px;margin-bottom:4px;width:${gridWidth}px">${monthLabels}</div>
-        <div class="heatmap" style="grid-template-columns:repeat(${totalWeeks}, 14px)">
-          ${cells.join('')}
-        </div>
+        <div id="${htmlId}_months" style="position:relative;height:18px;margin-bottom:4px;width:${gridWidth}px">${monthLabels}</div>
+        <div id="${htmlId}" class="heatmap" style="grid-template-columns:repeat(${totalWeeks}, 14px)"></div>
       </div>
       <div style="display:flex;align-items:center;gap:4px;margin-top:10px;font-size:11px;color:#999">
         <span>少</span>
@@ -589,6 +703,40 @@ function renderHeatmap(heatmap) {
         <span>多</span>
       </div>
     </div>`;
+}
+
+function initHeatmapAsync(rootId, cells, totalWeeks, gridWidth, months, maxCount) {
+  const root = document.getElementById(rootId);
+  if (!root) return;
+  const colors = ['#ebedf0', '#c6e48b', '#7bc96f', '#239a3b', '#196127'];
+
+  // month labels already injected; keep for compatibility
+  root.style.gridTemplateColumns = `repeat(${totalWeeks}, 14px)`;
+
+  const batchSize = 220;
+  let idx = 0;
+
+  function appendBatch() {
+    if (!root) return;
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < batchSize && idx < cells.length; i++, idx++) {
+      const c = cells[idx];
+      const el = document.createElement('div');
+      el.className = 'hm-cell';
+      el.style.background = colors[c.level];
+      el.style.gridRow = String(c.day + 1);
+      el.title = c.tip;
+      const tip = document.createElement('span');
+      tip.className = 'hm-tip';
+      tip.textContent = c.tip;
+      el.appendChild(tip);
+      frag.appendChild(el);
+    }
+    root.appendChild(frag);
+    if (idx < cells.length) requestAnimationFrame(appendBatch);
+  }
+
+  requestAnimationFrame(appendBatch);
 }
 
 // ========== 邮票统计 ==========
@@ -907,7 +1055,13 @@ function wfRand(seed) {
 }
 
 function drawWordCloud(canvas, words) {
+  // backward-compatible sync draw (small data)
+  return drawWordCloudAsync(canvas, words, { async: false });
+}
+
+function drawWordCloudAsync(canvas, words, opts = {}) {
   if (!words || words.length === 0) return;
+  const asyncMode = opts.async !== false;
   const dpr = window.devicePixelRatio || 1;
   const W = canvas.clientWidth, H = canvas.clientHeight;
   canvas.width = W * dpr; canvas.height = H * dpr;
@@ -949,35 +1103,59 @@ function drawWordCloud(canvas, words) {
   }
 
   const cx = W / 2, cy = H / 2;
-  items.forEach(item => {
+  const maxTries = 2200;
+
+  function placeOne(item) {
     item.x = cx - item.w / 2; item.y = cy - item.h / 2;
-    if (!overlaps(item)) { placed.push(item); return; }
-    for (let t = 0; t < 2200; t++) {
+    if (!overlaps(item)) { placed.push(item); return true; }
+    for (let t = 0; t < maxTries; t++) {
       const angle = t * (0.11 + rng() * 0.03);
       const r = 2 + t * (0.35 + rng() * 0.14);
       item.x = cx + r * Math.cos(angle) - item.w / 2;
       item.y = cy + r * Math.sin(angle) * (0.62 + rng() * 0.16) - item.h / 2;
       if (item.x >= 0 && item.y >= 0 && item.x + item.w <= W && item.y + item.h <= H && !overlaps(item)) {
-        placed.push(item); return;
+        placed.push(item); return true;
       }
     }
-    // place off-screen if spiral fails
     item.x = -9999; item.y = -9999; placed.push(item);
-  });
+    return false;
+  }
 
-  placed.forEach(item => {
-    if (item.x < -999) return;
-    ctx.save();
-    ctx.font = `${item.weight} ${item.fontSize}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif`;
-    ctx.fillStyle = item.color;
-    ctx.textBaseline = 'top';
-    ctx.translate(item.x + item.w / 2, item.y + item.h / 2);
-    ctx.rotate(item.angle * Math.PI / 180);
-    ctx.fillText(item.word, -item.baseW / 2 + 2, -item.baseH / 2 + 1);
-    ctx.restore();
-  });
+  function drawAll() {
+    ctx.clearRect(0, 0, W, H);
+    placed.forEach(item => {
+      if (item.x < -999) return;
+      ctx.save();
+      ctx.font = `${item.weight} ${item.fontSize}px "PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif`;
+      ctx.fillStyle = item.color;
+      ctx.textBaseline = 'top';
+      ctx.translate(item.x + item.w / 2, item.y + item.h / 2);
+      ctx.rotate(item.angle * Math.PI / 180);
+      ctx.fillText(item.word, -item.baseW / 2 + 2, -item.baseH / 2 + 1);
+      ctx.restore();
+    });
+    canvas._wfItems = placed;
+  }
 
-  canvas._wfItems = placed;
+  if (!asyncMode || items.length <= 18) {
+    items.forEach(placeOne);
+    drawAll();
+    return;
+  }
+
+  let idx = 0;
+  const perFrame = 3;
+  function step() {
+    for (let i = 0; i < perFrame && idx < items.length; i++, idx++) {
+      placeOne(items[idx]);
+    }
+    if (idx < items.length) {
+      requestAnimationFrame(step);
+    } else {
+      drawAll();
+    }
+  }
+  requestAnimationFrame(step);
 }
 
 function setupCloudTooltip(canvas, tooltip) {
@@ -1035,9 +1213,9 @@ function initWordClouds() {
     const cCombined = document.getElementById('wfCanvasCombined');
     const cMy = document.getElementById('wfCanvasMy');
     const cFriend = document.getElementById('wfCanvasFriend');
-    if (cCombined) { drawWordCloud(cCombined, _wfData.combined); setupCloudTooltip(cCombined, tip); }
-    if (cMy) { drawWordCloud(cMy, _wfData.my); setupCloudTooltip(cMy, tip); }
-    if (cFriend) { drawWordCloud(cFriend, _wfData.friend); setupCloudTooltip(cFriend, tip); }
+    if (cCombined) { drawWordCloudAsync(cCombined, _wfData.combined); setupCloudTooltip(cCombined, tip); }
+    if (cMy) { drawWordCloudAsync(cMy, _wfData.my); setupCloudTooltip(cMy, tip); }
+    if (cFriend) { drawWordCloudAsync(cFriend, _wfData.friend); setupCloudTooltip(cFriend, tip); }
   }, 100);
 }
 
@@ -1056,7 +1234,7 @@ function bindWordFreqTabs() {
         if (cv && _wfData) {
           const key = target === 'my' ? 'my' : target === 'friend' ? 'friend' : 'combined';
           setTimeout(() => {
-            drawWordCloud(cv, _wfData[key]);
+            drawWordCloudAsync(cv, _wfData[key]);
             setupCloudTooltip(cv, document.getElementById('wfTip'));
           }, 50);
         }
