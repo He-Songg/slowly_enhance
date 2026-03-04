@@ -173,12 +173,20 @@ const SlowlyInterceptor = (() => {
 
     const saveStats = await SlowlyDB.saveLetters(friendId, letters);
     try {
+      const page = data.comments?.current_page || null;
+      const maxDeliverAt = letters.map(l => l?.deliver_at).filter(Boolean).sort().slice(-1)[0] || null;
       await SlowlyDB.saveMeta('lastCollectedAt', { at: new Date().toISOString(), friendId });
+      await SlowlyDB.saveMeta(`friendProgress:${friendId}`, {
+        friendId,
+        lastPage: page,
+        maxDeliverAt,
+        updatedAt: new Date().toISOString()
+      });
     } catch (e) {}
     notifyCollection('letters', letters.length);
 
     const page = data.comments?.current_page || '?';
-    console.log(`[Slowly Enhance] ✓ 已收集好友 ${friendId} 第 ${page} 页的 ${letters.length} 封信件（图片:${saveStats?.imageCount || 0}，语音:${saveStats?.audioCount || 0}，type分布:${JSON.stringify(typeDist)}）`);
+    console.log(`[Slowly Enhance] ✓ 已收集好友 ${friendId} 第 ${page} 页的 ${letters.length} 封信件（新增:${saveStats?.newCount ?? '?'}，图片:${saveStats?.imageCount || 0}，语音:${saveStats?.audioCount || 0}，type分布:${JSON.stringify(typeDist)}）`);
   }
 
   async function processMe(data) {

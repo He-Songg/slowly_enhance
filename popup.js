@@ -2,16 +2,10 @@ const POPUP_THEMES = {
   purple: { '--primary': '#667eea', '--primary-dark': '#764ba2', '--primary-light': '#a78bfa', '--primary-bg': '#f8f9ff', '--bg': '#f8f9fa', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
   orange: { '--primary': '#f59e0b', '--primary-dark': '#d97706', '--primary-light': '#fbbf24', '--primary-bg': '#fffbeb', '--bg': '#faf5ee', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
   teal: { '--primary': '#14b8a6', '--primary-dark': '#0d9488', '--primary-light': '#5eead4', '--primary-bg': '#f0fdfa', '--bg': '#f0faf8', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
-  rose: { '--primary': '#f43f5e', '--primary-dark': '#be123c', '--primary-light': '#fb7185', '--primary-bg': '#fff1f2', '--bg': '#fdf2f4', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' },
-  dark: { '--primary': '#89b4fa', '--primary-dark': '#585b70', '--primary-light': '#b4befe', '--primary-bg': '#313244', '--bg': '#1e1e2e', '--card-bg': '#282838', '--text': '#cdd6f4', '--text-muted': '#6c7086' }
+  rose: { '--primary': '#f43f5e', '--primary-dark': '#be123c', '--primary-light': '#fb7185', '--primary-bg': '#fff1f2', '--bg': '#fdf2f4', '--card-bg': 'white', '--text': '#333', '--text-muted': '#999' }
 };
 
 function applyPopupTheme(themeId) {
-  if (themeId === 'system') {
-    const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-    applyPopupTheme(dark ? 'dark' : 'purple');
-    return;
-  }
   const vars = POPUP_THEMES[themeId];
   if (!vars) return;
   const root = document.documentElement;
@@ -23,7 +17,9 @@ function applyPopupTheme(themeId) {
 document.addEventListener('DOMContentLoaded', async () => {
   try {
     const result = await chrome.storage.local.get('theme');
-    if (result.theme) applyPopupTheme(result.theme);
+    const t = result.theme;
+    if (POPUP_THEMES[t]) applyPopupTheme(t);
+    else applyPopupTheme('purple');
   } catch {}
 
   const contentEl = document.getElementById('content');
@@ -32,11 +28,17 @@ document.addEventListener('DOMContentLoaded', async () => {
   const btnStats = document.getElementById('btnStats');
   const btnClear = document.getElementById('btnClear');
   const btnOpenSlowly = document.getElementById('btnOpenSlowly');
+  const btnOpenGithub = document.getElementById('btnOpenGithub');
   const lastCollectedText = document.getElementById('lastCollectedText');
 
   if (btnOpenSlowly) {
     btnOpenSlowly.addEventListener('click', () => {
       chrome.tabs.create({ url: 'https://web.slowly.app/' });
+    });
+  }
+  if (btnOpenGithub) {
+    btnOpenGithub.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://github.com/He-Songg/slowly_enhance' });
     });
   }
 

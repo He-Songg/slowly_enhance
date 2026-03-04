@@ -373,7 +373,11 @@ async function computeOverview() {
       let wordCount = 0;
       let imageCount = 0;
       let audioCount = 0;
+      let lastDeliverAt = '';
       letters.forEach(l => {
+        if (l.deliver_at && (!lastDeliverAt || String(l.deliver_at) > String(lastDeliverAt))) {
+          lastDeliverAt = l.deliver_at;
+        }
         const text = l.body || '';
         const cn = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
         const en = text.replace(/[\u4e00-\u9fff\u3400-\u4dbf]/g, ' ')
@@ -400,7 +404,8 @@ async function computeOverview() {
         receivedCount: received.length,
         wordCount,
         imageCount,
-        audioCount
+        audioCount,
+        lastDeliverAt
       });
     }
     return stats;

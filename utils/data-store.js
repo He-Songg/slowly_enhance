@@ -354,7 +354,7 @@ const SlowlyDB = (() => {
       return putBatch('friends', items);
     },
 
-    saveLetters(friendId, letters) {
+    async saveLetters(friendId, letters) {
       const items = letters.filter(l => l && l.id).map(l => {
         // attachments 实际格式: 逗号分隔的文件名字符串
         // 例: "49643353-5451959-1772038003_VabaRT5RGz_n.jpg,49643353-5451959-xxx.m4a"
@@ -398,11 +398,54 @@ const SlowlyDB = (() => {
       });
       const pageImageCount = items.reduce((s, it) => s + (it.imageCount || 0), 0);
       const pageAudioCount = items.reduce((s, it) => s + (it.audioCount || 0), 0);
-      return putBatch('letters', items).then(() => ({
-        savedCount: items.length,
-        imageCount: pageImageCount,
-        audioCount: pageAudioCount
-      }));
+
+      // 增量采集：已存在的信件不重复写入，便于“只补抓新增”
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction('letters', 'readwrite');
+        const store = transaction.objectStore('letters');
+        let newCount = 0;
+        let processed = 0;
+        const total = items.length;
+
+        function done() {
+          resolve({
+            savedCount: total,
+            newCount,
+            imageCount: pageImageCount,
+            audioCount: pageAudioCount
+          });
+        }
+
+        if (total === 0) {
+          transaction.oncomplete = done;
+          transaction.commit?.();
+          return;
+        }
+
+        items.forEach(it => {
+          const req = store.get(it.id);
+          req.onsuccess = () => {
+            if (!req.result) {
+              newCount++;
+              store.put(it);
+            }
+            processed++;
+            if (processed === total) {
+              // wait for tx complete
+            }
+          };
+          req.onerror = () => {
+            // fallback: still try to write
+            newCount++;
+            try { store.put(it); } catch {}
+            processed++;
+          };
+        });
+
+        transaction.oncomplete = done;
+        transaction.onerror = () => reject(transaction.error);
+      });
     },
 
     getLettersByFriend(friendId) {

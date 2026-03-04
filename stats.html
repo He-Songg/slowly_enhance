@@ -71,12 +71,34 @@
       margin-bottom: 20px;
       box-shadow: 0 2px 8px rgba(0,0,0,0.04);
     }
+    .card.collapsed { padding-bottom: 16px; }
+    .card.collapsed > :not(.card-title) { display: none !important; }
     .card-title {
       font-size: 15px;
       font-weight: 600;
       color: var(--text-secondary);
       margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
     }
+    .card-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      padding: 4px 8px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+    }
+    .card-toggle:hover { border-color: var(--primary); color: var(--primary); }
+    .card-toggle .chev { display:inline-block; transition: transform 0.15s; }
+    .card.collapsed .card-toggle .chev { transform: rotate(-90deg); }
 
     .stat-row {
       display: grid;
@@ -541,7 +563,10 @@
       <h1>Slowly Enhance - 详细统计</h1>
       <div class="sub" id="topSub">加载中...</div>
     </div>
-    <div class="theme-switcher" id="themeSwitcher"></div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <a id="ghLink" href="#" title="打开 GitHub 仓库" style="color:rgba(255,255,255,0.92);text-decoration:none;font-weight:700;font-size:13px;letter-spacing:0.2px">GitHub</a>
+      <div class="theme-switcher" id="themeSwitcher"></div>
+    </div>
   </div>
 
   <div class="container">

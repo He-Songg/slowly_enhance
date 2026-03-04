@@ -2,13 +2,10 @@ let cachedOverview = null;
 let cachedFriendStats = {};
 let currentView = 'overview';
 let stampMetaMap = {};
+let _collapsedState = {};
+let _rankingSortKey = 'letters';
 
 const THEMES = {
-  system: {
-    label: '跟随系统',
-    color: 'linear-gradient(135deg, #111 0%, #111 50%, #f3f4f6 50%, #f3f4f6 100%)',
-    vars: null
-  },
   purple: {
     label: '蓝紫',
     color: '#667eea',
@@ -28,35 +25,13 @@ const THEMES = {
     label: '玫瑰',
     color: '#f43f5e',
     vars: { '--primary': '#f43f5e', '--primary-dark': '#be123c', '--primary-light': '#fb7185', '--primary-bg': '#fff1f2', '--bg': '#fdf2f4', '--card-bg': 'white', '--text': '#333', '--text-secondary': '#555', '--text-muted': '#999', '--border': '#e5c0c8', '--bar-sent': 'linear-gradient(90deg, #f43f5e, #e11d48)', '--bar-received': 'linear-gradient(90deg, #fb7185, #fda4af)' }
-  },
-  dark: {
-    label: '深色',
-    color: '#1e1e2e',
-    vars: { '--primary': '#89b4fa', '--primary-dark': '#585b70', '--primary-light': '#b4befe', '--primary-bg': '#313244', '--bg': '#1e1e2e', '--card-bg': '#282838', '--text': '#cdd6f4', '--text-secondary': '#bac2de', '--text-muted': '#6c7086', '--border': '#45475a', '--bar-sent': 'linear-gradient(90deg, #89b4fa, #74c7ec)', '--bar-received': 'linear-gradient(90deg, #b4befe, #cba6f7)' }
   }
 };
 
-let _systemThemeMql = null;
 let _currentThemeId = 'purple';
-
-function getSystemPreferredThemeId() {
-  const mql = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)');
-  return mql && mql.matches ? 'dark' : 'purple';
-}
 
 function applyTheme(themeId) {
   _currentThemeId = themeId;
-  if (themeId === 'system') {
-    const resolved = getSystemPreferredThemeId();
-    applyTheme(resolved);
-    _currentThemeId = 'system';
-    chrome.storage.local.set({ theme: 'system' });
-    document.querySelectorAll('.theme-dot').forEach(d => {
-      d.classList.toggle('active', d.dataset.theme === 'system');
-    });
-    return;
-  }
-
   const theme = THEMES[themeId];
   if (!theme || !theme.vars) return;
   const root = document.documentElement;
@@ -73,8 +48,7 @@ function renderThemeSwitcher() {
   const container = document.getElementById('themeSwitcher');
   if (!container) return;
   container.innerHTML = Object.entries(THEMES).map(([id, t]) => {
-    const bg = id === 'system' ? `background:${t.color};border-color:rgba(255,255,255,0.55)` : `background:${t.color}`;
-    return `<div class="theme-dot" data-theme="${id}" style="${bg}" title="${t.label}"></div>`;
+    return `<div class="theme-dot" data-theme="${id}" style="background:${t.color}" title="${t.label}"></div>`;
   }).join('');
   container.querySelectorAll('.theme-dot').forEach(dot => {
     dot.addEventListener('click', () => applyTheme(dot.dataset.theme));
@@ -87,17 +61,10 @@ function getThemeColor() {
 
 async function initTheme() {
   renderThemeSwitcher();
-  if (!_systemThemeMql && window.matchMedia) {
-    _systemThemeMql = window.matchMedia('(prefers-color-scheme: dark)');
-    _systemThemeMql.addEventListener?.('change', () => {
-      if (_currentThemeId === 'system') {
-        applyTheme('system');
-      }
-    });
-  }
   try {
     const result = await chrome.storage.local.get('theme');
-    applyTheme(result.theme || 'purple');
+    const t = result.theme;
+    applyTheme(THEMES[t] ? t : 'purple');
   } catch {
     applyTheme('purple');
   }
@@ -130,6 +97,13 @@ function animateOverviewNumbers(scopeEl) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   initTheme();
+  const gh = document.getElementById('ghLink');
+  if (gh) {
+    gh.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.open('https://github.com/He-Songg/slowly_enhance', '_blank', 'noopener');
+    });
+  }
   const params = new URLSearchParams(location.search);
   const friendId = params.get('friendId');
 
@@ -147,7 +121,15 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   try {
     const cs = await sendToTab(tab.id, { action: 'getCollectionStatus' }).catch(() => null);
+    try {
+      const st = await chrome.storage.local.get('collapsedCards');
+      _collapsedState = st.collapsedCards || {};
+    } catch {}
     cachedOverview = await sendToTab(tab.id, { action: 'getOverview' });
+    try {
+      const st2 = await chrome.storage.local.get('rankingSortKey');
+      _rankingSortKey = st2.rankingSortKey || 'letters';
+    } catch {}
     renderTabs(cachedOverview, friendId);
     if (cs?.lastCollectedAt) {
       const base = document.getElementById('topSub').textContent || '';
@@ -167,6 +149,57 @@ document.addEventListener('DOMContentLoaded', async () => {
       3）下拉/翻页加载历史信件</div>`;
   }
 });
+
+function compareBySortKey(a, b, key) {
+  if (key === 'words') return (b.wordCount || 0) - (a.wordCount || 0);
+  if (key === 'images') return (b.imageCount || 0) - (a.imageCount || 0);
+  if (key === 'recent') return String(b.lastDeliverAt || '').localeCompare(String(a.lastDeliverAt || ''));
+  return (b.letterCount || 0) - (a.letterCount || 0);
+}
+
+function sortLabel(key) {
+  if (key === 'words') return '字数';
+  if (key === 'images') return '图片';
+  if (key === 'recent') return '最近联系';
+  return '信件数';
+}
+
+function cardKeyFromTitle(title, scope) {
+  return `${scope || 'global'}::${String(title || '').trim()}`;
+}
+
+function enhanceCollapsibleCards(scope) {
+  const container = document.getElementById('mainContent');
+  if (!container) return;
+  container.querySelectorAll('.card').forEach((card, idx) => {
+    const titleEl = card.querySelector('.card-title');
+    if (!titleEl) return;
+    const titleText = titleEl.textContent.replace(/\s+/g, ' ').trim();
+    const key = cardKeyFromTitle(titleText, scope);
+    card.dataset.cardKey = key;
+
+    if (!titleEl.querySelector('.card-toggle')) {
+      const toggle = document.createElement('span');
+      toggle.className = 'card-toggle';
+      toggle.innerHTML = `<span class="chev">▾</span><span class="txt">折叠</span>`;
+      toggle.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const isCollapsed = card.classList.toggle('collapsed');
+        const map = _collapsedState || {};
+        map[key] = isCollapsed;
+        _collapsedState = map;
+        toggle.querySelector('.txt').textContent = isCollapsed ? '展开' : '折叠';
+        try { await chrome.storage.local.set({ collapsedCards: map }); } catch {}
+      });
+      titleEl.appendChild(toggle);
+    }
+
+    const collapsed = !!(_collapsedState && _collapsedState[key]);
+    card.classList.toggle('collapsed', collapsed);
+    const txt = titleEl.querySelector('.card-toggle .txt');
+    if (txt) txt.textContent = collapsed ? '展开' : '折叠';
+  });
+}
 
 function renderTabs(overview, activeFriendId) {
   const tabsEl = document.getElementById('tabs');
@@ -266,14 +299,24 @@ function showOverview() {
       </div>
     </div>`;
 
-  if (data.friendRanking?.length > 0) {
-    const maxLetters = data.friendRanking[0].letterCount;
+  const ranking = (data.friendRanking || []).slice().sort((a, b) => compareBySortKey(a, b, _rankingSortKey));
+  if (ranking.length > 0) {
+    const maxLetters = Math.max(1, ...ranking.map(x => x.letterCount || 0));
 
     html += `
     <div class="card">
       <div class="card-title">
-        好友信件排行
-        <button class="export-btn" id="exportBtn">导出 CSV</button>
+        <span>好友信件排行</span>
+        <span style="display:flex;gap:10px;align-items:center">
+          <label style="font-size:12px;color:var(--text-muted)">排序：</label>
+          <select id="rankingSort" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--card-bg);color:var(--text-secondary);font-size:12px">
+            <option value="letters">信件数</option>
+            <option value="words">字数</option>
+            <option value="images">图片数</option>
+            <option value="recent">最近联系</option>
+          </select>
+          <button class="export-btn" id="exportBtn">导出 CSV</button>
+        </span>
       </div>
       <div class="legend">
         <div class="legend-item"><div class="legend-dot" style="background:var(--primary)"></div> 发出</div>
@@ -281,7 +324,7 @@ function showOverview() {
       </div>
       <div class="bar-chart">`;
 
-    data.friendRanking.forEach(f => {
+    ranking.forEach(f => {
       const sentPct = (f.sentCount / maxLetters * 100).toFixed(1);
       const recvPct = (f.receivedCount / maxLetters * 100).toFixed(1);
       const statusTag = f.status === 'hidden' ? ' <span style="color:#ff9800;font-size:11px">隐藏</span>'
@@ -317,7 +360,7 @@ function showOverview() {
         </thead>
         <tbody>`;
 
-    data.friendRanking.forEach(f => {
+    ranking.forEach(f => {
       const statusLabel = f.status === 'hidden'
         ? '<span style="color:#ff9800">隐藏</span>'
         : f.status === 'removed'
@@ -341,10 +384,21 @@ function showOverview() {
 
   document.getElementById('mainContent').innerHTML = html;
   animateOverviewNumbers(document.getElementById('mainContent'));
+  enhanceCollapsibleCards('overview');
 
   const exportBtn = document.getElementById('exportBtn');
   if (exportBtn) {
     exportBtn.addEventListener('click', () => exportCSV(data));
+  }
+
+  const sortSel = document.getElementById('rankingSort');
+  if (sortSel) {
+    sortSel.value = _rankingSortKey;
+    sortSel.addEventListener('change', async () => {
+      _rankingSortKey = sortSel.value;
+      try { await chrome.storage.local.set({ rankingSortKey: _rankingSortKey }); } catch {}
+      showOverview();
+    });
   }
 
   loadAdvancedOverview();
@@ -405,6 +459,8 @@ async function loadAdvancedOverview() {
     container.insertAdjacentHTML('beforeend', renderCountryStats(adv));
     container.insertAdjacentHTML('beforeend', renderExportSection());
     bindExportButtons(tab.id);
+    // 高级统计是后插入的，需补一次折叠绑定
+    enhanceCollapsibleCards('overview');
   } catch(e) {
     console.warn('[Slowly Enhance] 高级统计加载失败:', e);
   }
@@ -530,6 +586,7 @@ async function showFriendDetail(tabId, friendId) {
     </div>`;
 
   document.getElementById('mainContent').innerHTML = html;
+  enhanceCollapsibleCards(`friend:${friendId}`);
 
   loadAdvancedFriend(tabId, friendId);
 }
@@ -565,6 +622,8 @@ async function loadAdvancedFriend(tabId, friendId) {
 
     container.insertAdjacentHTML('beforeend', renderFriendExportSection(friendId));
     bindFriendExportButtons(tabId, friendId);
+    // 高级统计是后插入的，需补一次折叠绑定
+    enhanceCollapsibleCards(`friend:${friendId}`);
   } catch(e) {
     console.warn('[Slowly Enhance] 好友高级统计加载失败:', e);
   }
@@ -1255,6 +1314,7 @@ function renderExportSection() {
         <button class="export-btn" id="exportHtmlBtn">导出 HTML 存档</button>
         <button class="export-btn" id="exportTxtBtn" style="background:#795548">导出 TXT</button>
         <button class="export-btn" id="exportCsvBtn" style="background:#4caf50">导出 CSV</button>
+        <button class="export-btn" id="exportYearBtn" style="background:#1565c0">年度总结 HTML</button>
         <button class="export-btn" id="exportScreenshotBtn" style="background:#e65100">导出长图</button>
       </div>
     </div>`;
@@ -1266,6 +1326,7 @@ function bindExportButtons(tabId) {
     const htmlBtn = document.getElementById('exportHtmlBtn');
     const txtBtn = document.getElementById('exportTxtBtn');
     const csvBtn = document.getElementById('exportCsvBtn');
+    const yearBtn = document.getElementById('exportYearBtn');
     const ssBtn = document.getElementById('exportScreenshotBtn');
 
     if (jsonBtn) jsonBtn.addEventListener('click', () => doExportJson(tabId));
@@ -1274,8 +1335,242 @@ function bindExportButtons(tabId) {
     if (csvBtn) csvBtn.addEventListener('click', () => {
       if (cachedOverview) exportCSV(cachedOverview);
     });
+    if (yearBtn) yearBtn.addEventListener('click', () => doExportYearSummaryHtml(tabId));
     if (ssBtn) ssBtn.addEventListener('click', () => doExportScreenshot('slowly_overview'));
   }, 100);
+}
+
+function countWords(text) {
+  const t = String(text || '');
+  const cn = (t.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+  const en = t.replace(/[\u4e00-\u9fff\u3400-\u4dbf]/g, ' ').split(/\s+/).filter(w => w.length > 0).length;
+  return cn + en;
+}
+
+function escapeHtml(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+async function doExportYearSummaryHtml(tabId) {
+  const btn = document.getElementById('exportYearBtn');
+  if (!btn) return;
+  const oldText = btn.textContent;
+  btn.textContent = '导出中...';
+  btn.disabled = true;
+
+  try {
+    const data = await sendToTab(tabId, { action: 'exportAllData' });
+    const letters = Array.isArray(data?.letters) ? data.letters : [];
+    const years = Array.from(new Set(
+      letters.map(l => String(l.deliver_at || l.created_at || '').slice(0, 4)).filter(y => /^\d{4}$/.test(y))
+    )).sort();
+    const latestYear = years.slice(-1)[0] || String(new Date().getFullYear());
+    const picked = prompt('输入要生成的年份（YYYY）', latestYear) || latestYear;
+    const year = String(picked).trim();
+    if (!/^\d{4}$/.test(year)) throw new Error('年份格式不正确');
+
+    const yearLetters = letters.filter(l => String(l.deliver_at || l.created_at || '').startsWith(year + '-'));
+    if (yearLetters.length === 0) throw new Error(`没有 ${year} 年的数据（请先采集信件）`);
+
+    const myId = data?.myId;
+    const monthCount = Array.from({ length: 12 }, () => 0);
+    const weekdayCount = Array.from({ length: 7 }, () => 0); // 0-6: Sun-Sat
+    const stampCount = new Map();
+    const friendAgg = new Map();
+    let totalWords = 0, totalImages = 0, totalAudio = 0, totalSent = 0, totalReceived = 0;
+    let maxWordLetter = null;
+
+    yearLetters.forEach(l => {
+      const dt = String(l.deliver_at || l.created_at || '');
+      const m = parseInt(dt.slice(5, 7), 10);
+      if (m >= 1 && m <= 12) monthCount[m - 1]++;
+      try {
+        const dd = new Date(dt);
+        const wd = dd.getDay();
+        if (!Number.isNaN(wd)) weekdayCount[wd] = (weekdayCount[wd] || 0) + 1;
+      } catch {}
+
+      const fid = l.friendId;
+      const name = l.friendName || String(fid);
+      const agg = friendAgg.get(fid) || { friendId: fid, name, letters: 0, words: 0, images: 0, audio: 0, last: '' };
+      agg.letters++;
+      const w = countWords(l.body);
+      agg.words += w;
+      agg.images += Number(l.imageCount || 0);
+      agg.audio += Number(l.audioCount || 0);
+      const dd = String(l.deliver_at || '');
+      if (dd && (!agg.last || dd > agg.last)) agg.last = dd;
+      friendAgg.set(fid, agg);
+
+      totalWords += w;
+      totalImages += Number(l.imageCount || 0);
+      totalAudio += Number(l.audioCount || 0);
+      if (myId && l.user === myId) totalSent++; else totalReceived++;
+
+      const stamp = String(l.stamp || '').trim();
+      if (stamp) stampCount.set(stamp, (stampCount.get(stamp) || 0) + 1);
+      if (!maxWordLetter || w > maxWordLetter.words) {
+        maxWordLetter = { friendName: name, deliverAt: l.deliver_at || l.created_at || '', words: w };
+      }
+    });
+
+    const topFriends = Array.from(friendAgg.values()).sort((a, b) => b.letters - a.letters).slice(0, 12);
+    const maxMonth = Math.max(1, ...monthCount);
+    const exportAt = new Date().toISOString();
+    const avgWords = yearLetters.length ? Math.round(totalWords / yearLetters.length) : 0;
+    const maxMonthIdx = monthCount.reduce((best, v, i) => (v > monthCount[best] ? i : best), 0);
+    const topStamps = Array.from(stampCount.entries()).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const weekdayNames = ['周日','周一','周二','周三','周四','周五','周六'];
+    const maxWeekday = Math.max(1, ...weekdayCount);
+
+    const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Slowly 年度总结 - ${year}</title>
+<style>
+  :root { --bg:#0b0f14; --card:#0f1621; --text:#e8eef6; --muted:#a9b7c6; --accent:#4dd0e1; --accent2:#7c4dff; --border:rgba(255,255,255,0.12); }
+  * { box-sizing:border-box; }
+  body { margin:0; background:radial-gradient(1100px 600px at 15% 0%, rgba(124,77,255,0.25), transparent 55%), radial-gradient(900px 520px at 85% 15%, rgba(77,208,225,0.22), transparent 55%), var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 28px 18px 46px; }
+  .hero { display:flex; justify-content:space-between; gap:14px; align-items:flex-end; margin-bottom:18px; }
+  .hero h1 { margin:0; font-size: 30px; letter-spacing:0.2px; }
+  .hero .meta { color:var(--muted); font-size: 13px; line-height: 1.6; text-align:right; }
+  .grid { display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0 18px; }
+  .card { background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03)); border:1px solid var(--border); border-radius: 16px; padding: 14px 14px; box-shadow: 0 10px 30px rgba(0,0,0,0.25); }
+  .k { color:var(--muted); font-size: 12px; }
+  .v { margin-top: 6px; font-size: 22px; font-weight: 760; }
+  .section { margin-top: 14px; }
+  .section h2 { margin: 0 0 10px; font-size: 16px; letter-spacing:0.2px; color: rgba(232,238,246,0.92); }
+  .bars { display:grid; grid-template-columns: repeat(12, 1fr); gap: 6px; align-items:end; height: 132px; padding: 12px; }
+  .bar { background: linear-gradient(180deg, rgba(77,208,225,0.9), rgba(124,77,255,0.85)); border-radius: 10px 10px 6px 6px; height: 20px; min-height: 6px; box-shadow: 0 8px 20px rgba(0,0,0,0.25); }
+  .bar-labels { display:grid; grid-template-columns: repeat(12, 1fr); gap:6px; padding: 0 12px 12px; color: var(--muted); font-size: 11px; }
+  table { width:100%; border-collapse: collapse; overflow:hidden; border-radius: 14px; border:1px solid var(--border); }
+  th, td { padding: 10px 10px; font-size: 13px; border-bottom:1px solid rgba(255,255,255,0.08); text-align:left; }
+  th { color: rgba(232,238,246,0.88); font-weight: 700; background: rgba(255,255,255,0.04); }
+  td { color: rgba(232,238,246,0.92); }
+  tr:last-child td { border-bottom: none; }
+  .pill { display:inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; color: rgba(232,238,246,0.92); border:1px solid rgba(255,255,255,0.14); background: rgba(0,0,0,0.18); }
+  .foot { margin-top: 18px; color: var(--muted); font-size: 12px; line-height: 1.7; }
+  @media (max-width: 820px) { .grid { grid-template-columns: repeat(2, 1fr); } .hero { flex-direction: column; align-items:flex-start; } .hero .meta { text-align:left; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hero">
+      <div>
+        <h1>${year} 年度总结</h1>
+        <div class="k">来自 Slowly Enhance 本地统计</div>
+      </div>
+      <div class="meta">
+        导出时间：${escapeHtml(exportAt)}<br/>
+        信件：<span class="pill">${yearLetters.length}</span> · 发送：<span class="pill">${totalSent}</span> · 收到：<span class="pill">${totalReceived}</span>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="k">总字数</div><div class="v">${totalWords}</div></div>
+      <div class="card"><div class="k">图片数</div><div class="v">${totalImages}</div></div>
+      <div class="card"><div class="k">语音数</div><div class="v">${totalAudio}</div></div>
+      <div class="card"><div class="k">活跃好友数</div><div class="v">${friendAgg.size}</div></div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="k">平均每封字数</div><div class="v">${avgWords}</div></div>
+      <div class="card"><div class="k">最常通信月份</div><div class="v">${String(maxMonthIdx + 1).padStart(2, '0')} 月</div></div>
+      <div class="card"><div class="k">发送 / 收到</div><div class="v">${totalSent} / ${totalReceived}</div></div>
+      <div class="card"><div class="k">最长的一封（按字数）</div><div class="v" style="font-size:16px">${escapeHtml(maxWordLetter?.friendName || '')} · ${escapeHtml(maxWordLetter?.deliverAt || '')} · ${maxWordLetter?.words || 0}</div></div>
+    </div>
+
+    <div class="section">
+      <h2>按月信件数量</h2>
+      <div class="card" style="padding:0">
+        <div class="bars">
+          ${monthCount.map(c => {
+            const h = Math.max(6, Math.round((c / maxMonth) * 120));
+            return `<div class="bar" style="height:${h}px" title="${c}"></div>`;
+          }).join('')}
+        </div>
+        <div class="bar-labels">
+          ${Array.from({ length: 12 }, (_, i) => `<div style="text-align:center">${String(i + 1).padStart(2, '0')}</div>`).join('')}
+        </div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Top 好友（按信件数）</h2>
+      <div class="card" style="padding:0; overflow:hidden">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:44%">好友</th>
+              <th>信件</th>
+              <th>字数</th>
+              <th>图片</th>
+              <th>语音</th>
+              <th style="width:22%">最近</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${topFriends.map(f => `
+              <tr>
+                <td>${escapeHtml(f.name)}</td>
+                <td>${f.letters}</td>
+                <td>${f.words}</td>
+                <td>${f.images}</td>
+                <td>${f.audio}</td>
+                <td>${escapeHtml(f.last || '')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>按星期分布</h2>
+      <div class="card">
+        ${weekdayCount.map((c, i) => {
+          const w = Math.max(6, Math.round((c / maxWeekday) * 100));
+          return `<div style="display:flex;align-items:center;gap:10px;margin:8px 0">
+            <div style="width:42px;color:var(--muted);font-size:12px">${weekdayNames[i]}</div>
+            <div style="flex:1;height:10px;border-radius:999px;background:rgba(255,255,255,0.08);overflow:hidden">
+              <div style="width:${w}%;height:100%;border-radius:999px;background:linear-gradient(90deg, rgba(77,208,225,0.9), rgba(124,77,255,0.85))"></div>
+            </div>
+            <div style="width:40px;text-align:right;color:rgba(232,238,246,0.9);font-size:12px">${c}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>Top 邮票（按使用次数）</h2>
+      <div class="card">
+        ${topStamps.length ? topStamps.map(([slug, c]) => `<div style="display:flex;justify-content:space-between;gap:12px;margin:8px 0"><div style="color:rgba(232,238,246,0.92);font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(slug)}</div><div class="pill">${c}</div></div>`).join('') : `<div class="k">本年度无邮票数据</div>`}
+      </div>
+    </div>
+
+    <div class="foot">
+      说明：字数为“中文字符数 + 英文按空格分词数”的粗略统计；附件数量来自已收集信件中的识别结果。<br/>
+      项目主页：<a href="https://github.com/He-Songg/slowly_enhance" target="_blank" rel="noopener" style="color:var(--accent)">github.com/He-Songg/slowly_enhance</a>
+    </div>
+  </div>
+</body>
+</html>`;
+
+    downloadFile(html, `Slowly_年度总结_${year}.html`, 'text/html');
+  } catch (e) {
+    alert('导出失败: ' + (e?.message || String(e)));
+  }
+
+  btn.textContent = oldText;
+  btn.disabled = false;
 }
 
 async function doExportJson(tabId) {

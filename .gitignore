@@ -2,3 +2,4 @@
 *.log
 node_modules/
 .env
+FEATURE_MEMO.md
