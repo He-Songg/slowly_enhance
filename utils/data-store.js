@@ -4,7 +4,7 @@
  */
 const SlowlyDB = (() => {
   const DB_NAME = 'SlowlyEnhanceDB';
-  const DB_VERSION = 5;
+  const DB_VERSION = 6;
   let dbInstance = null;
 
   function open() {
@@ -48,6 +48,22 @@ const SlowlyDB = (() => {
           }
           if (!mediaStore.indexNames.contains('updatedAt')) {
             mediaStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+          }
+        }
+
+        // 草稿缓存（写信防丢）
+        if (!db.objectStoreNames.contains('drafts')) {
+          const draftStore = db.createObjectStore('drafts', { keyPath: 'key' });
+          draftStore.createIndex('friendId', 'friendId', { unique: false });
+          draftStore.createIndex('updatedAt', 'updatedAt', { unique: false });
+        } else {
+          const tx = e.target.transaction;
+          const draftStore = tx.objectStore('drafts');
+          if (!draftStore.indexNames.contains('friendId')) {
+            draftStore.createIndex('friendId', 'friendId', { unique: false });
+          }
+          if (!draftStore.indexNames.contains('updatedAt')) {
+            draftStore.createIndex('updatedAt', 'updatedAt', { unique: false });
           }
         }
       };
@@ -115,6 +131,16 @@ const SlowlyDB = (() => {
         const index = store.index(indexName);
         const req = index.getAll(value);
         req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    });
+  }
+
+  function deleteKey(storeName, key) {
+    return tx(storeName, 'readwrite').then(({ store }) => {
+      return new Promise((resolve, reject) => {
+        const req = store.delete(key);
+        req.onsuccess = () => resolve(true);
         req.onerror = () => reject(req.error);
       });
     });
@@ -335,6 +361,7 @@ const SlowlyDB = (() => {
     getAllByIndex,
     count,
     clearStore,
+    deleteKey,
 
     saveFriends(friends, status = 'normal') {
       const items = friends.map(f => {
@@ -477,6 +504,41 @@ const SlowlyDB = (() => {
 
     getMeta(key) {
       return get('meta', key);
+    },
+
+    // ========== 草稿缓存（写信防丢） ==========
+    saveDraft(friendId, text, extra = {}) {
+      const now = new Date().toISOString();
+      const key = `draft:${String(friendId || 'unknown')}`;
+      const t = String(text || '');
+      const len = t.length;
+      const hash = extra.hash || null;
+      return put('drafts', {
+        key,
+        friendId: String(friendId || 'unknown'),
+        text: t,
+        len,
+        hash,
+        createdAt: extra.createdAt || now,
+        updatedAt: now,
+        source: extra.source || '',
+        url: extra.url || '',
+        title: extra.title || ''
+      });
+    },
+
+    getDraft(friendId) {
+      const key = `draft:${String(friendId || 'unknown')}`;
+      return get('drafts', key);
+    },
+
+    clearDraft(friendId) {
+      const key = `draft:${String(friendId || 'unknown')}`;
+      return deleteKey('drafts', key);
+    },
+
+    listDrafts() {
+      return getAll('drafts');
     },
 
     saveStampMeta(items) {

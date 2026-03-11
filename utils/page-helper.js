@@ -6,6 +6,7 @@ const SlowlyPageHelper = (() => {
   let indicator = null;
   let collectCount = { friends: 0, letters: 0 };
   let activeFriendId = null;
+  let seToast = null;
 
   function createIndicator() {
     if (indicator) return;
@@ -107,10 +108,31 @@ const SlowlyPageHelper = (() => {
         50% { box-shadow: 0 2px 20px rgba(102,126,234,0.7); }
       }
       #se-badge.collecting { animation: se-pulse 1.5s ease-in-out infinite; }
+
+      #se-toast {
+        position: fixed;
+        bottom: 78px;
+        right: 20px;
+        z-index: 100000;
+        background: rgba(20, 20, 20, 0.92);
+        color: white;
+        padding: 10px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.45;
+        max-width: 260px;
+        box-shadow: 0 6px 22px rgba(0,0,0,0.25);
+        display: none;
+      }
+      #se-toast a { color: #c4b5fd; text-decoration: underline; cursor: pointer; }
     `;
 
     document.head.appendChild(style);
     document.body.appendChild(indicator);
+
+    seToast = document.createElement('div');
+    seToast.id = 'se-toast';
+    document.body.appendChild(seToast);
 
     const badge = document.getElementById('se-badge');
     const panel = document.getElementById('se-panel');
@@ -128,6 +150,32 @@ const SlowlyPageHelper = (() => {
     document.getElementById('se-btn-scroll').addEventListener('click', () => {
       autoScrollLetters();
     });
+  }
+
+  function showToast(html, ms = 3500) {
+    if (!seToast) return;
+    seToast.innerHTML = html;
+    seToast.style.display = 'block';
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => {
+      if (seToast) seToast.style.display = 'none';
+    }, ms);
+  }
+
+  function hashText(s) {
+    const str = String(s || '');
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h) ^ str.charCodeAt(i);
+    return (h >>> 0).toString(16);
+  }
+
+  function pickFriendKey() {
+    if (activeFriendId) return String(activeFriendId);
+    try {
+      const m = location.pathname.match(/\/friend\/([^/?#]+)/i);
+      if (m && m[1]) return String(m[1]);
+    } catch {}
+    return 'unknown';
   }
 
   function updateStats(friends, letters) {
@@ -247,6 +295,14 @@ const SlowlyPageHelper = (() => {
 
   let editorToolbar = null;
   let currentEditor = null;
+  let draftSaveTimer = null;
+  let lastSavedHash = '';
+  let dirtySince = 0;
+  let lastEditorSnapshot = '';
+  let lastKnownFriendKey = '';
+  let restoreBtn = null;
+  let clearBtn = null;
+  let cacheHintEl = null;
 
   function createEditorToolbar() {
     if (editorToolbar) return;
@@ -303,11 +359,14 @@ const SlowlyPageHelper = (() => {
     editorToolbar.id = 'se-editor-toolbar';
     editorToolbar.innerHTML = `
       <div id="se-editor-bar">
+        <button class="se-ed-btn" data-action="restoreDraft" style="display:none" title="恢复本地缓存草稿（防丢）">↩︎ 恢复草稿</button>
+        <button class="se-ed-btn" data-action="clearDraft" style="display:none" title="清除本地缓存草稿">✖ 清除草稿</button>
         <button class="se-ed-btn" data-action="indent" title="在光标处插入8个空格缩进 (Tab)">⇥ 缩进</button>
         <button class="se-ed-btn" data-action="indentAll" title="为每个段落添加段首缩进">¶ 全文缩进</button>
         <button class="se-ed-btn" data-action="trimLines" title="将连续空行合并为一个 (Ctrl+Shift+L)">⊟ 清理空行</button>
         <button class="se-ed-btn" data-action="trimSpaces" title="去除每行首尾多余空格">⊞ 清理空格</button>
         <button class="se-ed-btn primary" data-action="formatAll" title="一键执行全文缩进+清理空行+清理空格 (Ctrl+Shift+F)">✨ 一键整理</button>
+        <span id="se-draft-hint" style="margin-left:6px;font-size:11px;color:#777;display:none"></span>
       </div>
     `;
     document.body.appendChild(editorToolbar);
@@ -317,9 +376,22 @@ const SlowlyPageHelper = (() => {
         e.preventDefault();
         e.stopPropagation();
         const action = btn.dataset.action;
-        if (currentEditor) handleEditorAction(action, currentEditor);
+        if (!currentEditor) return;
+        if (action === 'restoreDraft') {
+          restoreDraftToEditor(currentEditor);
+          return;
+        }
+        if (action === 'clearDraft') {
+          clearCurrentDraft();
+          return;
+        }
+        handleEditorAction(action, currentEditor);
       });
     });
+
+    restoreBtn = editorToolbar.querySelector('[data-action="restoreDraft"]');
+    clearBtn = editorToolbar.querySelector('[data-action="clearDraft"]');
+    cacheHintEl = document.getElementById('se-draft-hint');
   }
 
   function getEditorValue(el) {
@@ -415,6 +487,110 @@ const SlowlyPageHelper = (() => {
     return false;
   }
 
+  async function updateDraftButtonsForEditor(el) {
+    if (!restoreBtn || !clearBtn || !cacheHintEl) return;
+    const friendKey = pickFriendKey();
+    lastKnownFriendKey = friendKey;
+    const draft = await SlowlyDB?.getDraft?.(friendKey).catch(() => null);
+    const cur = getEditorValue(el);
+    const curHash = hashText(cur);
+    const hasDraft = !!(draft && draft.text != null && String(draft.text).length > 0);
+
+    if (!hasDraft) {
+      restoreBtn.style.display = 'none';
+      clearBtn.style.display = 'none';
+      cacheHintEl.style.display = 'none';
+      return;
+    }
+
+    const draftHash = draft.hash || hashText(draft.text);
+    const same = draftHash && curHash && draftHash === curHash;
+    restoreBtn.style.display = same ? 'none' : 'inline-block';
+    clearBtn.style.display = 'inline-block';
+
+    const at = draft.updatedAt ? String(draft.updatedAt).replace('T', ' ').slice(0, 16) : '';
+    cacheHintEl.textContent = `已缓存（${at || '未知时间'}）`;
+    cacheHintEl.style.display = 'inline';
+
+    if (!same) {
+      showToast(`检测到该好友的未发送草稿，可在右上角点击「恢复草稿」`);
+    }
+  }
+
+  function startDraftAutoSave(el) {
+    stopDraftAutoSave();
+    lastSavedHash = '';
+    dirtySince = 0;
+    draftSaveTimer = setInterval(() => {
+      if (!currentEditor) return;
+      if (!dirtySince) return;
+      const now = Date.now();
+      if (now - dirtySince < 2500) return; // 避免刚输入就立刻写入
+      saveDraftNow(currentEditor).catch(() => {});
+    }, 3000);
+  }
+
+  function stopDraftAutoSave() {
+    if (draftSaveTimer) clearInterval(draftSaveTimer);
+    draftSaveTimer = null;
+  }
+
+  async function saveDraftNow(el) {
+    const friendKey = pickFriendKey();
+    lastKnownFriendKey = friendKey;
+    const text = getEditorValue(el);
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return;
+    const h = hashText(text);
+    if (h === lastSavedHash) return;
+    lastSavedHash = h;
+    dirtySince = 0;
+    await SlowlyDB?.saveDraft?.(friendKey, text, {
+      hash: h,
+      source: el.tagName === 'TEXTAREA' ? 'textarea' : (el.isContentEditable ? 'contenteditable' : 'textbox'),
+      url: location.href,
+      title: document.title
+    });
+    if (cacheHintEl) {
+      cacheHintEl.textContent = `已缓存（刚刚）`;
+      cacheHintEl.style.display = 'inline';
+    }
+  }
+
+  async function restoreDraftToEditor(el) {
+    const friendKey = pickFriendKey();
+    const draft = await SlowlyDB?.getDraft?.(friendKey).catch(() => null);
+    if (!draft || !draft.text) return;
+    const cur = getEditorValue(el);
+    if (cur && cur.trim() && cur !== draft.text) {
+      const ok = confirm('将用本地缓存草稿覆盖当前内容（可撤销）？');
+      if (!ok) return;
+    }
+    lastEditorSnapshot = cur || '';
+    setEditorValue(el, draft.text);
+    showToast(`已恢复草稿。<a id="se-undo-draft">撤销</a>`, 5000);
+    setTimeout(() => {
+      const a = document.getElementById('se-undo-draft');
+      if (a) {
+        a.addEventListener('click', (e) => {
+          e.preventDefault();
+          setEditorValue(el, lastEditorSnapshot);
+          showToast('已撤销恢复');
+        }, { once: true });
+      }
+    }, 50);
+    await updateDraftButtonsForEditor(el);
+  }
+
+  async function clearCurrentDraft() {
+    const friendKey = pickFriendKey();
+    await SlowlyDB?.clearDraft?.(friendKey).catch(() => {});
+    if (restoreBtn) restoreBtn.style.display = 'none';
+    if (clearBtn) clearBtn.style.display = 'none';
+    if (cacheHintEl) cacheHintEl.style.display = 'none';
+    showToast('已清除本地草稿缓存');
+  }
+
   function watchForEditor() {
     createEditorToolbar();
 
@@ -423,6 +599,8 @@ const SlowlyPageHelper = (() => {
       if (isEditorElement(el)) {
         currentEditor = el;
         if (editorToolbar) editorToolbar.style.display = 'block';
+        startDraftAutoSave(el);
+        updateDraftButtonsForEditor(el).catch(() => {});
       }
     });
 
@@ -433,9 +611,16 @@ const SlowlyPageHelper = (() => {
         if (!isEditorElement(active)) {
           if (editorToolbar) editorToolbar.style.display = 'none';
           currentEditor = null;
+          stopDraftAutoSave();
         }
       }, 200);
     });
+
+    document.addEventListener('input', (e) => {
+      const el = e.target;
+      if (!currentEditor || el !== currentEditor) return;
+      dirtySince = Date.now();
+    }, true);
 
     document.addEventListener('keydown', (e) => {
       if (!currentEditor) return;
@@ -462,6 +647,17 @@ const SlowlyPageHelper = (() => {
         return;
       }
     });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && currentEditor) {
+        saveDraftNow(currentEditor).catch(() => {});
+      }
+    });
+    window.addEventListener('beforeunload', () => {
+      if (currentEditor) {
+        try { saveDraftNow(currentEditor); } catch {}
+      }
+    });
   }
 
   function init() {
@@ -485,7 +681,34 @@ const SlowlyPageHelper = (() => {
     });
     window.addEventListener('slowly-enhance-active-friend', (e) => {
       const fid = e?.detail?.friendId;
-      if (fid != null) activeFriendId = String(fid);
+      if (fid != null) {
+        activeFriendId = String(fid);
+        if (currentEditor) updateDraftButtonsForEditor(currentEditor).catch(() => {});
+      }
+    });
+
+    // 发送成功自动清草稿：inject.js 会发出 __SLOWLY_ENHANCE_DRAFT_SENT__
+    window.addEventListener('message', (e) => {
+      const msg = e?.data;
+      if (!msg || msg.type !== '__SLOWLY_ENHANCE_DRAFT_SENT__') return;
+      const friendId = String(msg.friendId || '');
+      if (!friendId || !SlowlyDB?.getDraft) return;
+      (async () => {
+        const draft = await SlowlyDB.getDraft(friendId).catch(() => null);
+        if (!draft) return;
+        const draftHash = draft.hash || hashText(draft.text || '');
+        const sentHash = String(msg.bodyHash || '');
+        const shouldClear = !!msg.cleardraft && (!sentHash || !draftHash || sentHash === draftHash);
+        if (shouldClear) {
+          await SlowlyDB.clearDraft(friendId).catch(() => {});
+          if (currentEditor && pickFriendKey() === friendId) {
+            updateDraftButtonsForEditor(currentEditor).catch(() => {});
+          }
+          showToast('检测到发送成功：已自动清除本地草稿缓存');
+        } else if (msg.cleardraft) {
+          showToast('检测到发送成功：本地草稿与发送内容不同，未自动清除（可手动清除）', 5000);
+        }
+      })();
     });
   }
 

@@ -67,7 +67,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       SlowlyDB.clearStore('friends'),
       SlowlyDB.clearStore('letters'),
       SlowlyDB.clearStore('meta'),
-      SlowlyDB.clearStore('mediaCache').catch(() => {})
+      SlowlyDB.clearStore('mediaCache').catch(() => {}),
+      SlowlyDB.clearStore('drafts').catch(() => {})
     ]).then(() => sendResponse({ success: true }));
     return true;
   }
