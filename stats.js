@@ -487,6 +487,8 @@ async function showFriendDetail(tabId, friendId) {
   document.getElementById('topSub').textContent = `与 ${name} 的通信统计`;
 
   let html = `
+    ${renderFriendSearchSection(friendId)}
+
     <div class="card">
       <div class="card-title">通信概览</div>
       <div class="stat-row">
@@ -583,12 +585,182 @@ async function showFriendDetail(tabId, friendId) {
           <div class="label">最近一封</div>
         </div>
       </div>
-    </div>`;
+    </div>
+    `;
 
   document.getElementById('mainContent').innerHTML = html;
   enhanceCollapsibleCards(`friend:${friendId}`);
+  bindFriendSearch(tabId, friendId);
 
   loadAdvancedFriend(tabId, friendId);
+}
+
+function escapeHtml2(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderFriendSearchSection(friendId) {
+  return `
+    <div class="card" id="seSearchCard" data-friend="${friendId}">
+      <div class="card-title">🔎 搜索信件内容</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <input id="seSearchInput" placeholder="输入关键词（普通）或正则表达式" style="flex:1;min-width:220px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);outline:none" />
+        <select id="seSearchMode" style="padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--card-bg);color:var(--text-secondary)">
+          <option value="plain">普通</option>
+          <option value="regex">正则</option>
+        </select>
+        <input id="seSearchFlags" value="i" title="正则 flags（如 i m s u）" style="width:86px;padding:10px 12px;border-radius:10px;border:1px solid var(--border);outline:none" />
+        <select id="seSearchSender" style="padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:var(--card-bg);color:var(--text-secondary)">
+          <option value="all">全部</option>
+          <option value="me">我发的</option>
+          <option value="friend">对方发的</option>
+        </select>
+        <button class="export-btn" id="seSearchBtn" style="background:#3b82f6">搜索</button>
+      </div>
+      <div id="seSearchMeta" style="font-size:12px;color:var(--text-muted);margin-bottom:10px;display:none"></div>
+      <div id="seSearchResults"></div>
+      <div style="display:flex;gap:10px;align-items:center;margin-top:12px">
+        <button class="export-btn" id="seSearchMoreBtn" style="display:none;background:#64748b">加载更多</button>
+        <span id="seSearchErr" style="font-size:12px;color:#ef4444;display:none"></span>
+      </div>
+      <style>
+        #seSearchResults .se-hit { padding:10px 12px; border:1px solid var(--border); border-radius:12px; margin:8px 0; background: rgba(0,0,0,0.02); }
+        #seSearchResults .se-hit .meta { font-size:12px; color: var(--text-muted); margin-bottom:6px; }
+        #seSearchResults mark { background: rgba(245, 158, 11, 0.35); padding: 0 2px; border-radius: 4px; }
+        #seSearchResults .snippet { font-size:13px; line-height:1.65; color: var(--text); white-space: pre-wrap; word-break: break-word; }
+      </style>
+    </div>
+  `;
+}
+
+function bindFriendSearch(tabId, friendId) {
+  const card = document.getElementById('seSearchCard');
+  if (!card) return;
+  const input = document.getElementById('seSearchInput');
+  const modeSel = document.getElementById('seSearchMode');
+  const flagsInput = document.getElementById('seSearchFlags');
+  const senderSel = document.getElementById('seSearchSender');
+  const btn = document.getElementById('seSearchBtn');
+  const moreBtn = document.getElementById('seSearchMoreBtn');
+  const resultsEl = document.getElementById('seSearchResults');
+  const errEl = document.getElementById('seSearchErr');
+  const metaEl = document.getElementById('seSearchMeta');
+
+  let cursor = 0;
+  let lastQuery = '';
+  let lastSender = 'all';
+  let lastMode = 'plain';
+  let lastFlags = 'i';
+
+  function setErr(msg) {
+    if (!errEl) return;
+    errEl.textContent = msg || '';
+    errEl.style.display = msg ? 'inline' : 'none';
+  }
+
+  function setMeta(msg) {
+    if (!metaEl) return;
+    metaEl.textContent = msg || '';
+    metaEl.style.display = msg ? 'block' : 'none';
+  }
+
+  function appendItems(items) {
+    if (!resultsEl) return;
+    (items || []).forEach(it => {
+      const who = it.fromMe ? '我' : '对方';
+      const when = it.deliver_at ? formatDateTime(it.deliver_at) : '';
+      const before = escapeHtml2(it.snippet?.before || '');
+      const match = escapeHtml2(it.snippet?.match || '');
+      const after = escapeHtml2(it.snippet?.after || '');
+      const html = `
+        <div class="se-hit">
+          <div class="meta">${who} · ${escapeHtml2(when)} · #${escapeHtml2(it.id)}</div>
+          <div class="snippet">${before}<mark>${match}</mark>${after}</div>
+        </div>`;
+      resultsEl.insertAdjacentHTML('beforeend', html);
+    });
+  }
+
+  async function runSearch(reset) {
+    const q = String(input?.value || '').trim();
+    const sender = String(senderSel?.value || 'all');
+    const mode = String(modeSel?.value || 'plain');
+    const flags = String(flagsInput?.value || '').trim();
+    setErr('');
+    if (!q) {
+      setErr('请输入关键词');
+      return;
+    }
+
+    if (reset) {
+      cursor = 0;
+      lastQuery = q;
+      lastSender = sender;
+      lastMode = mode;
+      lastFlags = flags;
+      if (resultsEl) resultsEl.innerHTML = '';
+      setMeta('搜索中...');
+    } else {
+      setMeta('加载中...');
+    }
+
+    if (btn) { btn.disabled = true; btn.textContent = reset ? '搜索中...' : '搜索'; }
+    if (moreBtn) { moreBtn.disabled = true; }
+
+    const resp = await sendToTab(tabId, {
+      action: 'searchLetters',
+      friendId,
+      query: q,
+      mode,
+      flags,
+      sender,
+      limit: 50,
+      cursor
+    }).catch(e => ({ error: e?.message || String(e) }));
+
+    if (resp?.error) {
+      setErr(resp.error);
+      setMeta('');
+      if (btn) { btn.disabled = false; btn.textContent = '搜索'; }
+      if (moreBtn) { moreBtn.disabled = false; }
+      return;
+    }
+
+    appendItems(resp.items || []);
+    cursor = Number(resp.nextCursor || cursor);
+    const hasMore = !!resp.hasMore;
+    if (moreBtn) {
+      moreBtn.style.display = hasMore ? 'inline-block' : 'none';
+      moreBtn.disabled = false;
+    }
+    const shown = resultsEl ? resultsEl.querySelectorAll('.se-hit').length : (resp.items || []).length;
+    setMeta(`已显示 ${shown} 条结果${hasMore ? '（可继续加载更多）' : ''}`);
+
+    if (btn) { btn.disabled = false; btn.textContent = '搜索'; }
+  }
+
+  if (btn) btn.addEventListener('click', () => runSearch(true));
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') runSearch(true);
+    });
+  }
+  if (moreBtn) {
+    moreBtn.addEventListener('click', () => {
+      // 若用户改了条件，强制重置
+      const q = String(input?.value || '').trim();
+      const sender = String(senderSel?.value || 'all');
+      const mode = String(modeSel?.value || 'plain');
+      const flags = String(flagsInput?.value || '').trim();
+      if (q !== lastQuery || sender !== lastSender || mode !== lastMode || flags !== lastFlags) runSearch(true);
+      else runSearch(false);
+    });
+  }
 }
 
 async function loadAdvancedFriend(tabId, friendId) {

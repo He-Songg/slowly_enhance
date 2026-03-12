@@ -62,6 +62,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     computeWordFreq(msg.friendId).then(data => sendResponse(data));
     return true;
   }
+  if (msg.action === 'searchLetters') {
+    searchLetters(msg).then(data => sendResponse(data)).catch(e => {
+      sendResponse({ error: e?.message || String(e) });
+    });
+    return true;
+  }
   if (msg.action === 'clearData') {
     Promise.all([
       SlowlyDB.clearStore('friends'),
@@ -133,6 +139,115 @@ async function resolveMyId(letters) {
   }
 
   return myId;
+}
+
+function _safeStr(s) {
+  return String(s == null ? '' : s);
+}
+
+function _normalizeForSearch(s) {
+  // 普通搜索：英文做 lower，中文不受影响
+  return _safeStr(s).toLowerCase();
+}
+
+function _sanitizeRegexFlags(flags) {
+  // 只允许常用 flags，避免引擎差异与奇怪行为
+  const raw = _safeStr(flags);
+  const keep = new Set(['i', 'm', 's', 'u']);
+  let out = '';
+  for (const ch of raw) {
+    if (keep.has(ch) && !out.includes(ch)) out += ch;
+  }
+  return out;
+}
+
+function _buildSnippet(body, idx, len) {
+  const text = _safeStr(body);
+  const start = Math.max(0, idx - 60);
+  const end = Math.min(text.length, idx + len + 60);
+  const before = text.slice(start, idx);
+  const match = text.slice(idx, idx + len);
+  const after = text.slice(idx + len, end);
+  return { before, match, after };
+}
+
+async function searchLetters(opt) {
+  const friendId = opt.friendId;
+  const query = _safeStr(opt.query).trim();
+  const mode = _safeStr(opt.mode || 'plain'); // plain | regex
+  const flags = _sanitizeRegexFlags(opt.flags || '');
+  const senderFilter = _safeStr(opt.sender || 'all'); // all | me | friend
+  const limit = Math.max(1, Math.min(50, Number(opt.limit || 50)));
+  const cursor = Math.max(0, Number(opt.cursor || 0)); // 在 letters(倒序) 中的扫描起点
+
+  if (!friendId) return { items: [], nextCursor: 0, hasMore: false, myId: null };
+  if (!query) return { items: [], nextCursor: 0, hasMore: false, myId: null };
+
+  const letters = await SlowlyDB.getLettersByFriend(friendId);
+  if (!letters || letters.length === 0) return { items: [], nextCursor: 0, hasMore: false, myId: null };
+
+  // 时间倒序（最近在前）
+  letters.sort((a, b) => String(b.deliver_at || '').localeCompare(String(a.deliver_at || '')));
+
+  const myId = await resolveMyId(letters);
+  const qn = _normalizeForSearch(query);
+  let re = null;
+  if (mode === 'regex') {
+    try {
+      // 默认加 u，提升 unicode 处理一致性（若用户显式不给，也加上）
+      const f = flags.includes('u') ? flags : (flags + 'u');
+      re = new RegExp(query, f);
+    } catch (e) {
+      throw new Error(`正则表达式无效：${e?.message || String(e)}`);
+    }
+  }
+  const items = [];
+
+  let i = cursor;
+  for (; i < letters.length; i++) {
+    const l = letters[i];
+    const body = _safeStr(l.body);
+    if (!body) continue;
+    const fromMe = myId ? (l.user === myId) : false;
+    if (senderFilter === 'me' && !fromMe) continue;
+    if (senderFilter === 'friend' && fromMe) continue;
+
+    let idx = -1;
+    let mlen = query.length || 1;
+    if (mode === 'regex' && re) {
+      const m = re.exec(body);
+      if (!m) continue;
+      idx = typeof m.index === 'number' ? m.index : body.indexOf(_safeStr(m[0]));
+      mlen = _safeStr(m[0]).length || 1;
+      // 避免 /g 影响下一次 exec（虽然我们没允许 g，但仍做保护）
+      re.lastIndex = 0;
+      if (idx < 0) continue;
+    } else {
+      const bn = _normalizeForSearch(body);
+      idx = bn.indexOf(qn);
+      if (idx < 0) continue;
+      mlen = query.length || 1;
+    }
+
+    const snip = _buildSnippet(body, idx, mlen);
+    items.push({
+      id: l.id,
+      deliver_at: l.deliver_at,
+      fromMe,
+      snippet: snip
+    });
+    if (items.length >= limit) {
+      i++;
+      break;
+    }
+  }
+
+  return {
+    myId: myId || null,
+    items,
+    nextCursor: i,
+    hasMore: i < letters.length
+  };
 }
 
 async function computeStats(friendId) {
